@@ -12,13 +12,18 @@ def get_data(ticker):
 
 def analyze_ticker(ticker):
     df = get_data(ticker)
+    if df.empty or len(df) < 10:
+        return {"ticker": ticker, "insight": "⚠️ Not enough data"}
     df["MA_10"] = df["Close"].rolling(10).mean()
-    signal = ""
-    if df["Close"].iloc[-1] > df["MA_10"].iloc[-1]:
-        signal = "Bullish crossover"
-    else:
-        signal = "Neutral"
+    try:
+        if df["Close"].iloc[-1] > df["MA_10"].iloc[-1]:
+            signal = "✅ Bullish crossover"
+        else:
+            signal = "⚠️ Neutral"
+    except Exception as e:
+        signal = f"❌ Error: {str(e)}"
     return {"ticker": ticker, "insight": signal}
+
 
 def get_top_signals():
     tickers = ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
