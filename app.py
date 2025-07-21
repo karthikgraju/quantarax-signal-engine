@@ -11,7 +11,12 @@ def get_signals(ticker):
     if df.empty or 'Close' not in df.columns:
         return df, {"error": "No price data available for this ticker."}
 
+    # Compute MA before dropping rows
     df['MA'] = df['Close'].rolling(window=10).mean()
+
+    if 'MA' not in df.columns:
+        return df, {"error": "MA calculation failed."}
+
     df_valid = df.dropna(subset=['Close', 'MA'])
 
     if len(df_valid) < 2:
@@ -24,7 +29,6 @@ def get_signals(ticker):
 
     signals = {}
 
-    # Signal generation logic
     if close_yesterday < ma_yesterday and close_today > ma_today:
         signals['ma_crossover'] = "📈 Bullish crossover"
         signals['recommendation'] = "🟢 Suggestion: BUY"
