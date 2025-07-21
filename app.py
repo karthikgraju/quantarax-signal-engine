@@ -18,13 +18,12 @@ for key, val in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-# Sidebar reset button
+# ──────────────────────────── Sidebar Controls ────────────────────────────────
 st.sidebar.header("Controls")
 if st.sidebar.button("🔄 Reset to defaults"):
     for key, val in DEFAULTS.items():
         st.session_state[key] = val
 
-# Sidebar sliders bound to session_state
 st.sidebar.header("Indicator Parameters")
 ma_window   = st.sidebar.slider(
     "MA window", 5, 50, st.session_state["ma_window"], key="ma_window"
@@ -45,7 +44,7 @@ macd_signal = st.sidebar.slider(
 # ──────────────────────────── Page Config & Title ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
 st.title("🚀 QuantaraX — Composite Signal Engine")
-st.subheader("MA + RSI + MACD Composite Signals & Backtest")
+st.write("MA + RSI + MACD Composite Signals & Backtest")
 
 # ────────────────────────── Load & Compute Indicators ─────────────────────────
 @st.cache_data
@@ -61,7 +60,7 @@ def load_and_compute(
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
 
-    # 1) Moving Average
+    # 1) MA
     df[f"MA{ma_window}"] = df["Close"].rolling(ma_window).mean()
 
     # 2) RSI
@@ -78,12 +77,11 @@ def load_and_compute(
     sig   = macd.ewm(span=macd_signal, adjust=False).mean()
     df["MACD"], df["MACD_Signal"] = macd, sig
 
-    # 4) Filter out rows with NaN in any key column
+    # 4) Drop rows with NaN in any key column
     cols = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
     mask = pd.Series(True, index=df.index)
     for c in cols:
-        if c in df.columns:
-            mask &= df[c].notna()
+        mask &= df[c].notna()
     df = df.loc[mask].reset_index(drop=True)
     return df
 
@@ -127,7 +125,7 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     df["Trade"]       = np.sign(comp)
     return df
 
-# ───────────────────────────── Backtest & Metrics ───────────────────────────
+# ───────────────────────────── Backtest & Metrics ────────────────────────────
 def backtest(df: pd.DataFrame):
     df = df.copy()
     df["Return"]   = df["Close"].pct_change().fillna(0)
@@ -143,7 +141,8 @@ def backtest(df: pd.DataFrame):
 
     return df, max_dd, sharpe, win_rt, dd
 
-# ─────────────────────────────── Main App ────────────────────────────────────
+# ───────────────────────────── Single‐Ticker Mode ────────────────────────────
+st.markdown("### Single‐Ticker Backtest")
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
 if st.button("▶️ Run Composite Backtest"):
     df = load_and_compute(
@@ -155,17 +154,14 @@ if st.button("▶️ Run Composite Backtest"):
         macd_signal
     )
     if df.empty:
-        st.error(f"No data for '{ticker}'.")
-        st.stop()
+        st.error(f"No data for '{ticker}'."); st.stop()
 
     df = build_composite(df)
     df, max_dd, sharpe, win_rt, dd = backtest(df)
 
-    # Live recommendation
     rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
     st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
 
-    # Metrics
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
@@ -176,30 +172,54 @@ if st.button("▶️ Run Composite Backtest"):
     **Win Rate:** {win_rt:.1f}%  
     """)
 
-    # Download CSV
-    st.download_button(
-        "Download full signals CSV",
-        df.to_csv(index=False),
-        f"{ticker}_composite_signals.csv"
-    )
+    st.pyplot(plt.figure(figsize=(8,4)))  # you can re-plot if you like…
 
-    # Plot panels
-    fig, axes = plt.subplots(4,1, figsize=(10,14), sharex=True)
-    axes[0].plot(df["Close"], label="Close")
-    axes[0].plot(df[f"MA{ma_window}"], "--", label=f"MA{ma_window}")
-    axes[0].set_title("Price & MA"); axes[0].legend()
+# ───────────────────────────── Batch‐Ticker Mode ─────────────────────────────
+st.markdown("---")
+st.markdown("### Batch Backtest")
+batch_input = st.text_area(
+    "Enter tickers (comma-separated)", 
+    "AAPL, MSFT, TSLA, SPY, QQQ"
+).upper()
 
-    axes[1].bar(df.index, df["Composite"], color="purple")
-    axes[1].set_title("Composite Vote")
+if st.button("▶️ Run Batch Backtest"):
+    tickers = [t.strip() for t in batch_input.split(",") if t.strip()]
+    results = []
 
-    axes[2].plot(df["CumBH"],    ":", label="Buy & Hold")
-    axes[2].plot(df["CumStrat"], label="Strategy")
-    axes[2].set_title("Equity Curves"); axes[2].legend()
+    rec_map = {1:"BUY", 0:"HOLD", -1:"SELL"}
 
-    axes[3].plot(dd, color="red")
-    axes[3].axhline(max_dd/100, linestyle="--", color="black")
-    axes[3].set_title("Drawdown")
+    for t in tickers:
+        df_t = load_and_compute(
+            t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal
+        )
+        if df_t.empty:
+            continue
 
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    st.pyplot(fig)
+        df_t = build_composite(df_t)
+        df_t, max_dd, sharpe, win_rt, dd = backtest(df_t)
+
+        rec       = rec_map[int(df_t["Trade"].iloc[-1])]
+        bh_return = (df_t["CumBH"].iloc[-1] - 1) * 100
+        st_return = (df_t["CumStrat"].iloc[-1] - 1) * 100
+
+        results.append({
+            "Ticker":         t,
+            "Composite vote": df_t["Composite"].iloc[-1],
+            "Signal":         rec,
+            "BuyHold %":      bh_return,
+            "Strat %":        st_return,
+            "Sharpe":         sharpe,
+            "Max Drawdown %": max_dd,
+            "Win Rate %":     win_rt
+        })
+
+    if not results:
+        st.error("No valid tickers/data.")
+    else:
+        perf_df = pd.DataFrame(results).set_index("Ticker")
+        st.dataframe(perf_df)
+        st.download_button(
+            "Download performance CSV",
+            perf_df.to_csv(),
+            "batch_performance.csv"
+        )
