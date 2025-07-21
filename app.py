@@ -3,11 +3,7 @@ import yfinance as yf
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
-import openai
-
-# ✅ Use OpenRouter settings
-openai.api_key = st.secrets["OPENROUTER_API_KEY"]
-openai.api_base = "https://openrouter.ai/api/v1"
+import requests
 
 st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 st.title("🚀 QuantaraX — Smart Signal Engine")
@@ -22,18 +18,27 @@ def get_data(ticker):
     return df
 
 # -----------------------------------
-# 🤖 Generate LLM commentary
+# 🤖 Generate commentary using Hugging Face model
 # -----------------------------------
 def get_llm_commentary(ticker, signal):
     try:
-        response = openai.chat.completions.create(
-            model="mistralai/mistral-7b-instruct",  # ✅ Use OpenRouter-compatible model
-            messages=[
-                {"role": "system", "content": "You are a financial analyst summarizing market signals."},
-                {"role": "user", "content": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?"}
-            ]
+        headers = {
+            "Authorization": f"Bearer {st.secrets['HF_TOKEN']}"
+        }
+        payload = {
+            "inputs": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?",
+        }
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            headers=headers,
+            json=payload,
+            timeout=60
         )
-        return response.choices[0].message.content
+        result = response.json()
+        if isinstance(result, list) and "generated_text" in result[0]:
+            return result[0]["generated_text"]
+        else:
+            return f"LLM Error: {result}"
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
