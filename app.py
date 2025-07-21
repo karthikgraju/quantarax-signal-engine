@@ -1,4 +1,4 @@
-import openai
+from openai import OpenAI
 import os
 import streamlit as st
 import yfinance as yf
