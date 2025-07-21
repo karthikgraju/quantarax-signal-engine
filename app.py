@@ -41,7 +41,7 @@ Under **Engine** you can:
 # ───────────────────────────── Engine Tab ─────────────────────────────
 with tab_engine:
 
-    # Defaults & Session State
+    # ───────────────────── Defaults & Session State ─────────────────────
     DEFAULTS = {
         "ma_window":   10,
         "rsi_period":  14,
@@ -53,7 +53,7 @@ with tab_engine:
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Sidebar Controls
+    # ───────────────────── Sidebar Controls ─────────────────────
     st.sidebar.header("Controls")
     if st.sidebar.button("🔄 Reset to defaults"):
         for k, v in DEFAULTS.items():
@@ -66,30 +66,27 @@ with tab_engine:
     macd_slow   = st.sidebar.slider("MACD slow span",  20, 40, st.session_state["macd_slow"],   key="macd_slow")
     macd_signal = st.sidebar.slider("MACD signal span", 5, 20, st.session_state["macd_signal"], key="macd_signal")
 
-    # Page Title
+    # ───────────────────── Page Title ─────────────────────
     st.title("🚀 QuantaraX — Composite Signal Engine")
     st.write("MA + RSI + MACD Composite Signals & Backtest")
 
-    # Load & Compute Indicators
+    # ───────────────────── Load & Compute Indicators ─────────────────────
     @st.cache_data(show_spinner=False)
     def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
         df = yf.download(ticker, period="6mo", progress=False)
         if df.empty or "Close" not in df:
             return pd.DataFrame()
-
         # MA
         ma_col = f"MA{ma_w}"
         df[ma_col] = df["Close"].rolling(ma_w).mean()
-
         # RSI
-        d = df["Close"].diff()
-        up = d.clip(lower=0)
-        dn = -d.clip(upper=0)
+        delta    = df["Close"].diff()
+        up       = delta.clip(lower=0)
+        down     = -delta.clip(upper=0)
         ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
-        ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
+        ema_down = down.ewm(com=rsi_p-1, adjust=False).mean()
         rsi_col  = f"RSI{rsi_p}"
         df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
-
         # MACD
         ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
@@ -97,7 +94,6 @@ with tab_engine:
         macd_sig = macd.ewm(span=sig, adjust=False).mean()
         df["MACD"] = macd
         df["MACD_Signal"] = macd_sig
-
         # Drop NA
         cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
         present = [c for c in cols if c in df.columns]
@@ -106,41 +102,40 @@ with tab_engine:
                 df = df.dropna(subset=present).reset_index(drop=True)
             except KeyError:
                 pass
-
         return df
 
-    # Build Composite Signals
+    # ───────────────────── Build Composite Signals ─────────────────────
     def build_composite(df, ma_w, rsi_p):
-        n = len(df)
-        close = df["Close"].to_numpy()
-        ma    = df[f"MA{ma_w}"].to_numpy()
-        rsi   = df[f"RSI{rsi_p}"].to_numpy()
-        macd  = df["MACD"].to_numpy()
-        sig   = df["MACD_Signal"].to_numpy()
+        n         = len(df)
+        close_arr = df["Close"].to_numpy()
+        ma_arr    = df[f"MA{ma_w}"].to_numpy()
+        rsi_arr   = df[f"RSI{rsi_p}"].to_numpy()
+        macd_arr  = df["MACD"].to_numpy()
+        sig_arr   = df["MACD_Signal"].to_numpy()
 
-        ma_sig  = np.zeros(n, int)
-        rsi_sig = np.zeros(n, int)
+        ma_sig    = np.zeros(n, int)
+        rsi_sig   = np.zeros(n, int)
         macd_sig2 = np.zeros(n, int)
-        comp    = np.zeros(n, int)
-        trade   = np.zeros(n, int)
+        comp      = np.zeros(n, int)
+        trade     = np.zeros(n, int)
 
         for i in range(1, n):
-            # MA
-            if close[i-1] < ma[i-1] and close[i] > ma[i]:
+            # MA crossover
+            if close_arr[i-1] < ma_arr[i-1] and close_arr[i] > ma_arr[i]:
                 ma_sig[i] =  1
-            elif close[i-1] > ma[i-1] and close[i] < ma[i]:
+            elif close_arr[i-1] > ma_arr[i-1] and close_arr[i] < ma_arr[i]:
                 ma_sig[i] = -1
-            # RSI
-            if rsi[i] < 30:
+            # RSI thresholds
+            if rsi_arr[i] < 30:
                 rsi_sig[i] =  1
-            elif rsi[i] > 70:
+            elif rsi_arr[i] > 70:
                 rsi_sig[i] = -1
-            # MACD
-            if macd[i-1] < sig[i-1] and macd[i] > sig[i]:
+            # MACD crossover
+            if macd_arr[i-1] < sig_arr[i-1] and macd_arr[i] > sig_arr[i]:
                 macd_sig2[i] =  1
-            elif macd[i-1] > sig[i-1] and macd[i] < sig[i]:
+            elif macd_arr[i-1] > sig_arr[i-1] and macd_arr[i] < sig_arr[i]:
                 macd_sig2[i] = -1
-
+            # Composite & trade
             comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
             trade[i] = np.sign(comp[i])
 
@@ -151,7 +146,7 @@ with tab_engine:
         df["Trade"]        = trade
         return df
 
-    # Backtest & Metrics
+    # ───────────────────── Backtest & Metrics ─────────────────────
     def backtest(df):
         df = df.copy()
         df["Return"]   = df["Close"].pct_change().fillna(0)
@@ -168,9 +163,16 @@ with tab_engine:
 
         return df, max_dd, sharpe, win_rt
 
-    # ───────────────────────────── Single‐Ticker Backtest ─────────────────────────────
+    # ───────────────────── Single‐Ticker Backtest ─────────────────────
     st.markdown("## Single‐Ticker Backtest")
     ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
+
+    # — Live Price via yfinance info —
+    if ticker:
+        info = yf.Ticker(ticker).info
+        live_price = info.get("regularMarketPrice")
+        if live_price is not None:
+            st.subheader(f"💲 Live Price: ${live_price:.2f}")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
@@ -180,10 +182,10 @@ with tab_engine:
 
         df_comp, max_dd, sharpe, win_rt = backtest(build_composite(df_raw, ma_window, rsi_period))
 
-        # Top‐line
+        # Top‐line recommendation
         last_trade = int(df_comp["Trade"].iloc[-1])
-        rec = {1:"🟢 BUY",0:"🟡 HOLD",-1:"🔴 SELL"}[last_trade]
-        st.success(f"**{ticker}**: {rec}")
+        rec_map    = {1:"🟢 BUY",0:"🟡 HOLD",-1:"🔴 SELL"}
+        st.success(f"**{ticker}**: {rec_map[last_trade]}")
 
         # 🔎 Why This Signal?
         ma_state   = int(df_comp["MA_Signal"].iloc[-1])
@@ -215,7 +217,7 @@ with tab_engine:
             st.write(f"- **MACD Signal:** {macd_text}")
             st.write(f"- **Composite Score:** {df_comp['Composite'].iloc[-1]}")
 
-        # Performance
+        # Performance Metrics
         bh = (df_comp["CumBH"].iloc[-1] - 1)*100
         sr = (df_comp["CumStrat"].iloc[-1] - 1)*100
         st.markdown(f"""
@@ -226,7 +228,7 @@ with tab_engine:
 - **Win Rate:**      {win_rt:.1f}%  
         """)
 
-        # Chart
+        # 3‐panel Chart
         fig, axs = plt.subplots(3,1,figsize=(10,12), sharex=True)
         axs[0].plot(df_comp["Close"], label="Close")
         axs[0].plot(df_comp[f"MA{ma_window}"], label=f"MA{ma_window}")
@@ -242,7 +244,7 @@ with tab_engine:
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
-    # ───────────────────────────── Batch Backtest ─────────────────────────────
+    # ───────────────────── Batch Backtest ─────────────────────
     st.markdown("---")
     st.markdown("## Batch Backtest")
     batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
@@ -251,16 +253,17 @@ with tab_engine:
         perf = []
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
             df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-            if df_t.empty: continue
+            if df_t.empty:
+                continue
             df_c, md, sh, wr = backtest(build_composite(df_t, ma_window, rsi_period))
             perf.append({
-                "Ticker": t,
-                "Composite": int(df_c["Composite"].iloc[-1]),
-                "Signal": {1:"BUY",0:"HOLD",-1:"SELL"}[int(df_c["Trade"].iloc[-1])],
-                "BuyHold %": (df_c["CumBH"].iloc[-1]-1)*100,
+                "Ticker":     t,
+                "Composite":  int(df_c["Composite"].iloc[-1]),
+                "Signal":     {1:"BUY",0:"HOLD",-1:"SELL"}[int(df_c["Trade"].iloc[-1])],
+                "BuyHold %":  (df_c["CumBH"].iloc[-1]-1)*100,
                 "Strategy %": (df_c["CumStrat"].iloc[-1]-1)*100,
-                "Sharpe": sh,
-                "MaxDD %": md,
+                "Sharpe":     sh,
+                "MaxDD %":    md,
                 "Win Rate %": wr
             })
         if not perf:
@@ -270,22 +273,22 @@ with tab_engine:
             st.dataframe(df_perf)
             st.download_button("Download CSV", df_perf.to_csv(), "batch.csv")
 
-    # ───────────────────────────── Hyperparameter Optimization ─────────────────────────────
+    # ───────────────────── Hyperparameter Optimization ─────────────────────
     st.markdown("---")
     st.markdown("## 🛠️ Hyperparameter Optimization")
-    ma_list  = st.sidebar.multiselect("MA windows to test",     [5,10,15,20,30], default=[ma_window],   key="grid_ma")
+    ma_list  = st.sidebar.multiselect("MA windows to test",     [5,10,15,20,30], default=[ma_window], key="grid_ma")
     rsi_list = st.sidebar.multiselect("RSI lookbacks to test",  [7,14,21,28],   default=[rsi_period], key="grid_rsi")
     mf_list  = st.sidebar.multiselect("MACD fast spans to test",[8,12,16,20],  default=[macd_fast],   key="grid_mf")
     ms_list  = st.sidebar.multiselect("MACD slow spans to test",[20,26,32,40],default=[macd_slow],   key="grid_ms")
-    sig_list = st.sidebar.multiselect("MACD sig spans to test", [5,9,12,16],   default=[macd_signal], key="grid_sig")
+    sig_list = st.sidebar.multiselect("MACD sig spans to test", [5,9,12,16],   default=[macd_signal],key="grid_sig")
 
     if st.button("🏃‍♂️ Run Grid Search"):
         if not ticker:
             st.error("Enter a ticker."); st.stop()
-        df_f = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-        if df_f.empty:
+        df_full = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
+        if df_full.empty:
             st.error(f"No data for '{ticker}'"); st.stop()
-        res = []
+        results = []
         with st.spinner("Testing combos…"):
             for ma_w in ma_list:
                 for rsi_p in rsi_list:
@@ -293,17 +296,19 @@ with tab_engine:
                         for ms in ms_list:
                             for s in sig_list:
                                 df_i = load_and_compute(ticker, ma_w, rsi_p, mf, ms, s)
-                                if df_i.empty: continue
-                                df_c, md, sh, wr = backtest(build_composite(df_i, ma_w, rsi_p))
+                                if df_i.empty:
+                                    continue
+                                df_c, md, sh_i, wr_i = backtest(build_composite(df_i, ma_w, rsi_p))
                                 strat = (df_c["CumStrat"].iloc[-1]-1)*100
-                                res.append({
+                                results.append({
                                     "MA":ma_w,"RSI":rsi_p,
                                     "MACD_Fast":mf,"MACD_Slow":ms,"MACD_Sig":s,
-                                    "Strategy %":strat,"Sharpe":sh,"MaxDD %":md,"Win %":wr
+                                    "Strategy %":strat,"Sharpe":sh_i,
+                                    "MaxDD %":md,"Win %":wr_i
                                 })
-        if not res:
+        if not results:
             st.error("No combos valid.")
         else:
-            df_grid = pd.DataFrame(res).sort_values("Strategy %", ascending=False).reset_index(drop=True)
+            df_grid = pd.DataFrame(results).sort_values("Strategy %",ascending=False).reset_index(drop=True)
             st.dataframe(df_grid.head(10), use_container_width=True)
-            st.download_button("Download CSV", df_grid.to_csv(index=False), "grid.csv")
+            st.download_button("Download full CSV", df_grid.to_csv(index=False), "grid.csv")
