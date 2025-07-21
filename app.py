@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Signal generation logic
+# Signal logic function
 def get_signals(ticker):
     df = yf.download(ticker, period="3mo")
 
@@ -13,7 +13,7 @@ def get_signals(ticker):
     df["MA_10"] = df["Close"].rolling(window=10).mean()
 
     if df["MA_10"].isnull().iloc[-1] or df["MA_10"].isnull().iloc[-2]:
-        raise ValueError("Moving average contains null values. Not enough data.")
+        raise ValueError("Insufficient data for moving average.")
 
     close_today = df["Close"].iloc[-1]
     close_yesterday = df["Close"].iloc[-2]
@@ -29,7 +29,7 @@ def get_signals(ticker):
 
     return df, signal
 
-# Chart plotting logic
+# Plotting function
 def plot_chart(df):
     fig, ax = plt.subplots()
     ax.plot(df.index, df["Close"], label="Close", linewidth=2)
@@ -40,7 +40,7 @@ def plot_chart(df):
     ax.legend()
     st.pyplot(fig)
 
-# Streamlit UI setup
+# Streamlit UI
 st.set_page_config(page_title="QuantaraX — Smart Signal Engine", page_icon="🚀")
 
 st.title("🚀 QuantaraX — Smart Signal Engine")
