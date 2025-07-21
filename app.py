@@ -1,118 +1,107 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="centered")
-st.title("🚀 QuantaraX — Smart Signal Engine")
-st.subheader("🔍 Generate Today's Signals")
-
+# ——————————————————————————————
+# Signal calculation
+# ——————————————————————————————
 def get_signals(ticker: str):
-    # Fetch 6 months to give MACD enough history
+    # 1) Download 6 months of daily data for MACD lookback
     df = yf.download(ticker, period="6mo", progress=False)
+    
+    # 2) Must have Close
+    if df.empty or "Close" not in df.columns:
+        return None, {"error": "❌ No valid 'Close' price data."}
 
-    if df.empty or "Close" not in df:
-        return None, {"error": "❌ No valid price data."}
-
-    # 10-day MA
+    # 3) Compute 10-day MA
     df["MA10"] = df["Close"].rolling(10).mean()
 
-    # RSI 14
+    # 4) Compute 14-day RSI
     delta = df["Close"].diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
+    up = delta.clip(lower=0); down = -delta.clip(upper=0)
     ema_up = up.ewm(com=13, adjust=False).mean()
     ema_down = down.ewm(com=13, adjust=False).mean()
-    rs = ema_up / ema_down
-    df["RSI14"] = 100 - (100 / (1 + rs))
+    df["RSI14"] = 100 - (100 / (1 + ema_up/ema_down))
 
-    # MACD (12-26) + signal (9)
+    # 5) Compute MACD (12-26) + Signal (9) + Histogram
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
     ema26 = df["Close"].ewm(span=26, adjust=False).mean()
     df["MACD"] = ema12 - ema26
     df["MACD_Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
     df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
 
-    # Drop initial NaNs
-    df = df.dropna(subset=["MA10", "RSI14", "MACD", "MACD_Signal"])
+    # 6) Ensure all columns exist
+    required = ["MA10", "RSI14", "MACD", "MACD_Signal"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return df, {"error": f"❌ Missing columns: {missing}"}
 
-    if len(df) < 2:
-        return None, {"error": "⚠️ Not enough data after cleaning."}
+    # 7) Filter out rows where any required column is NaN
+    mask = df["MA10"].notna() & df["RSI14"].notna() & df["MACD"].notna() & df["MACD_Signal"].notna()
+    df_valid = df.loc[mask]
+    if len(df_valid) < 2:
+        return df, {"error": "⚠️ Not enough data after cleaning."}
 
-    # Grab last two days
-    prev, last = df.iloc[-2], df.iloc[-1]
-    c_prev, c_last = float(prev["Close"]), float(last["Close"])
-    ma_prev, ma_last = float(prev["MA10"]), float(last["MA10"])
-    rsi = float(last["RSI14"])
-    macd, macd_sig = float(prev["MACD"]), float(last["MACD"])
-    sig_line = float(last["MACD_Signal"])
+    # 8) Grab yesterday & today
+    prev, last = df_valid.iloc[-2], df_valid.iloc[-1]
+    try:
+        c_prev, c_last = float(prev["Close"]), float(last["Close"])
+        ma_prev, ma_last = float(prev["MA10"]), float(last["MA10"])
+        rsi_last       = float(last["RSI14"])
+        macd_prev, macd_last = float(prev["MACD"]), float(last["MACD"])
+        sig_prev, sig_last   = float(prev["MACD_Signal"]), float(last["MACD_Signal"])
+    except Exception as e:
+        return df_valid, {"error": f"❌ Extraction failed: {e}"}
 
-    # Determine signals
-    # MA crossover
-    if ma_prev < c_prev and c_last > ma_last:
-        ma_signal = 1
-    elif ma_prev > c_prev and c_last < ma_last:
-        ma_signal = -1
-    else:
-        ma_signal = 0
+    # 9) Indicator signals
+    ma_signal  =  1 if (c_prev < ma_prev and c_last > ma_last) else (-1 if (c_prev > ma_prev and c_last < ma_last) else 0)
+    rsi_signal =  1 if rsi_last < 30 else (-1 if rsi_last > 70 else 0)
+    macd_signal = 1 if (macd_prev < sig_prev and macd_last > sig_last) else (-1 if (macd_prev > sig_prev and macd_last < sig_last) else 0)
 
-    # RSI: oversold (<30)=+1, overbought (>70)=-1
-    if rsi < 30:
-        rsi_signal = 1
-    elif rsi > 70:
-        rsi_signal = -1
-    else:
-        rsi_signal = 0
-
-    # MACD crossover: prev MACD < prev signal & MACD > signal => +1, opposite => -1
-    if macd < prev["MACD_Signal"] and macd_sig > sig_line:
-        macd_signal = 1
-    elif macd > prev["MACD_Signal"] and macd_sig < sig_line:
-        macd_signal = -1
-    else:
-        macd_signal = 0
-
-    # Composite score
+    # 10) Composite recommendation
     score = ma_signal + rsi_signal + macd_signal
-
-    if score > 0:
-        reco = "🟢 BUY"
-    elif score < 0:
-        reco = "🔴 SELL"
-    else:
-        reco = "🟡 HOLD"
+    recommendation = "🟢 BUY" if score > 0 else ("🔴 SELL" if score < 0 else "🟡 HOLD")
 
     signals = {
-        "ma_crossover": {1: "📈 Bullish", -1: "📉 Bearish", 0: "⏸️ None"}[ma_signal],
-        "rsi": f"{rsi:.1f} ({ '🟢 Oversold' if rsi_signal==1 else '🔴 Overbought' if rsi_signal==-1 else '⚪ Neutral'})",
-        "macd_crossover": {1:"📈 Bullish", -1:"📉 Bearish",0:"⏸️ None"}[macd_signal],
-        "recommendation": reco
+        "ma":      {1:"📈 Bullish", 0:"⏸️ None", -1:"📉 Bearish"}[ma_signal],
+        "rsi":     f"{rsi_last:.1f} ({'Oversold' if rsi_signal==1 else 'Overbought' if rsi_signal==-1 else 'Neutral'})",
+        "macd":    {1:"📈 Bullish", 0:"⏸️ None", -1:"📉 Bearish"}[macd_signal],
+        "recommendation": recommendation
     }
-    return df, signals
+    return df_valid, signals
+
+# ——————————————————————————————
+# Streamlit UI
+# ——————————————————————————————
+st.set_page_config(page_title="QuantaraX Signal Engine")
+st.title("🚀 QuantaraX — Smart Signal Engine")
+st.subheader("🔍 Generate Today's Signals")
 
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL").upper()
 
 if st.button("📊 Generate Today's Signals"):
     df, sig = get_signals(ticker)
+
     if df is None:
         st.error(sig["error"])
     else:
-        st.success(f"{ticker}: {sig['ma_crossover']} MA    |    {sig['macd_crossover']} MACD")
-        st.info(f"RSI14: {sig['rsi']}    →    Recommendation: {sig['recommendation']}")
+        # Display signals
+        st.success(f"{ticker}: MA→{sig['ma']}   |   RSI→{sig['rsi']}   |   MACD→{sig['macd']}")
+        st.info(f"Recommendation: {sig['recommendation']}")
 
-        # Plot
-        fig, (ax1, ax2, ax3) = plt.subplots(3,1,figsize=(10,8), sharex=True)
+        # Plot panels
+        fig, (ax1, ax2, ax3) = plt.subplots(3,1, figsize=(10,8), sharex=True)
 
         # Price + MA
         ax1.plot(df.index, df["Close"], label="Close", color="blue")
-        ax1.plot(df.index, df["MA10"], label="MA10", color="orange", linestyle="--")
+        ax1.plot(df.index, df["MA10"], label="MA10", linestyle="--", color="orange")
         ax1.set_title("Price & 10-Day MA"); ax1.legend()
 
         # RSI
-        ax2.plot(df.index, df["RSI14"], label="RSI14", color="purple")
+        ax2.plot(df.index, df["RSI14"], label="RSI(14)", color="purple")
         ax2.axhline(70, color="red", linestyle="--"); ax2.axhline(30, color="green", linestyle="--")
-        ax2.set_title("RSI (14)"); ax2.legend()
+        ax2.set_title("RSI"); ax2.legend()
 
         # MACD
         ax3.plot(df.index, df["MACD"], label="MACD", color="black")
