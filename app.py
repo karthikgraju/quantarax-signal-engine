@@ -5,7 +5,7 @@ import datetime
 import matplotlib.pyplot as plt
 import openai
 
-# ✅ Load API key from Streamlit secrets
+# ✅ Use OpenRouter settings
 openai.api_key = st.secrets["OPENROUTER_API_KEY"]
 openai.api_base = "https://openrouter.ai/api/v1"
 
@@ -27,9 +27,9 @@ def get_data(ticker):
 def get_llm_commentary(ticker, signal):
     try:
         response = openai.chat.completions.create(
-            model="mistralai/mistral-7b-instruct",  # You can change this if needed
+            model="mistralai/mistral-7b-instruct",  # ✅ Use OpenRouter-compatible model
             messages=[
-                {"role": "system", "content": "You are a financial analyst summarizing market signals for traders and investors."},
+                {"role": "system", "content": "You are a financial analyst summarizing market signals."},
                 {"role": "user", "content": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?"}
             ]
         )
