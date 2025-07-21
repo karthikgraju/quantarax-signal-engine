@@ -4,12 +4,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ── Page config ─────────────────────────────────────────────────────────
+# ─ Streamlit page config ─────────────────────────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
 st.title("🚀 QuantaraX — Composite Signal Engine")
 st.subheader("MA + RSI + MACD Composite Signals & Backtest")
 
-# ── Sidebar: parameter controls ──────────────────────────────────────────
+# ─ Sidebar: parameter controls ─────────────────────────────────────────────
 st.sidebar.header("Indicator Parameters")
 ma_window   = st.sidebar.slider("MA window",        5, 50, 10)
 rsi_period  = st.sidebar.slider("RSI lookback",     5, 30, 14)
@@ -17,14 +17,14 @@ macd_fast   = st.sidebar.slider("MACD fast span",   5, 20, 12)
 macd_slow   = st.sidebar.slider("MACD slow span",  20, 40, 26)
 macd_signal = st.sidebar.slider("MACD signal span", 5, 20,  9)
 
-# ── Load & compute indicators ────────────────────────────────────────────
+# ─ Load & compute indicators ───────────────────────────────────────────────
 @st.cache_data
 def load_and_compute(ticker: str) -> pd.DataFrame:
     df = yf.download(ticker, period="6mo", progress=False)
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
 
-    # 1) 10-day MA
+    # 1) Moving Average
     df[f"MA{ma_window}"] = df["Close"].rolling(ma_window).mean()
 
     # 2) RSI
@@ -41,18 +41,19 @@ def load_and_compute(ticker: str) -> pd.DataFrame:
     sig   = macd.ewm(span=macd_signal, adjust=False).mean()
     df["MACD"], df["MACD_Signal"] = macd, sig
 
-    # 4) Drop any rows where **all** of our indicator columns have missing values.
-    required = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
-    # Only keep the subset entries that actually exist in df
-    required = [col for col in required if col in df.columns]
-    if required:
-        df = df.dropna(subset=required).reset_index(drop=True)
-
+    # 4) Filter out any rows with NaN in _any_ of our indicator columns
+    cols = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
+    # build mask
+    mask = pd.Series(True, index=df.index)
+    for c in cols:
+        if c in df:
+            mask &= df[c].notna()
+    df = df.loc[mask].reset_index(drop=True)
     return df
 
-# ── Build composite signals ──────────────────────────────────────────────
+# ─ Build composite signals via pure‐Python loop ──────────────────────────
 def build_composite(df: pd.DataFrame) -> pd.DataFrame:
-    n = len(df)
+    n     = len(df)
     close = df["Close"].values
     ma    = df[f"MA{ma_window}"].values
     rsi   = df[f"RSI{rsi_period}"].values
@@ -80,7 +81,7 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
             macd_sig[i] = 1
         elif macd[i-1] > sigl[i-1] and macd[i] < sigl[i]:
             macd_sig[i] = -1
-        # Composite vote
+        # composite vote
         comp[i] = ma_sig[i] + rsi_sig[i] + macd_sig[i]
 
     df["MA_Signal"]   = ma_sig
@@ -90,7 +91,7 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     df["Trade"]       = np.sign(comp)  # +1 BUY, 0 HOLD, -1 SELL
     return df
 
-# ── Backtest & metrics ───────────────────────────────────────────────────
+# ─ Backtest & metrics ────────────────────────────────────────────────────
 def backtest(df: pd.DataFrame):
     df = df.copy()
     df["Return"]   = df["Close"].pct_change().fillna(0)
@@ -99,19 +100,18 @@ def backtest(df: pd.DataFrame):
     df["CumBH"]    = (1 + df["Return"]).cumprod()
     df["CumStrat"] = (1 + df["StratRet"]).cumprod()
 
-    # Drawdown
-    dd      = df["CumStrat"] / df["CumStrat"].cummax() - 1
-    max_dd  = dd.min() * 100
-    # Sharpe ratio
-    sharpe  = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
-    # Win rate
-    win_rt  = (df["StratRet"] > 0).mean() * 100
+    # drawdown
+    dd     = df["CumStrat"] / df["CumStrat"].cummax() - 1
+    max_dd = dd.min() * 100
+    # sharpe
+    sharpe = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
+    # win rate
+    win_rt = (df["StratRet"] > 0).mean() * 100
 
     return df, max_dd, sharpe, win_rt, dd
 
-# ── Main App ─────────────────────────────────────────────────────────────
+# ─ Main App ───────────────────────────────────────────────────────────────
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
-
 if st.button("▶️ Run Composite Backtest"):
     df = load_and_compute(ticker)
     if df.empty:
@@ -119,13 +119,13 @@ if st.button("▶️ Run Composite Backtest"):
         st.stop()
 
     df = build_composite(df)
-    df, max_dd, sharpe, win_rate, dd = backtest(df)
+    df, max_dd, sharpe, win_rt, dd = backtest(df)
 
     # Live recommendation
-    rec_map = { 1: "🟢 BUY",  0: "🟡 HOLD",  -1: "🔴 SELL" }
+    rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
     st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
 
-    # Performance metrics
+    # Metrics
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
@@ -133,7 +133,7 @@ if st.button("▶️ Run Composite Backtest"):
     **Strategy:** {strat_ret:.2f}%  
     **Sharpe:** {sharpe:.2f}  
     **Max Drawdown:** {max_dd:.2f}%  
-    **Win Rate:** {win_rate:.1f}%  
+    **Win Rate:** {win_rt:.1f}%  
     """)
 
     # Download CSV
@@ -152,7 +152,7 @@ if st.button("▶️ Run Composite Backtest"):
     axes[1].bar(df.index, df["Composite"], color="purple")
     axes[1].set_title("Composite Vote")
 
-    axes[2].plot(df["CumBH"],   ":", label="Buy & Hold")
+    axes[2].plot(df["CumBH"],    ":", label="Buy & Hold")
     axes[2].plot(df["CumStrat"], label="Strategy")
     axes[2].set_title("Equity Curves"); axes[2].legend()
 
