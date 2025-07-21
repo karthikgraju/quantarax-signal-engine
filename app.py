@@ -12,15 +12,15 @@ DEFAULTS = {
     "macd_slow":   26,
     "macd_signal":  9
 }
-for key, val in DEFAULTS.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # ───────────────────────────── Sidebar Controls ─────────────────────────────
 st.sidebar.header("Controls")
 if st.sidebar.button("🔄 Reset to defaults"):
-    for key, val in DEFAULTS.items():
-        st.session_state[key] = val
+    for k, v in DEFAULTS.items():
+        st.session_state[k] = v
 
 st.sidebar.header("Indicator Parameters")
 ma_window   = st.sidebar.slider("MA window",        5, 50, st.session_state["ma_window"],   key="ma_window")
@@ -41,7 +41,7 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     if df.empty or "Close" not in df:
         return pd.DataFrame()
 
-    # Moving Average
+    # MA
     ma_col = f"MA{ma_w}"
     df[ma_col] = df["Close"].rolling(ma_w).mean()
 
@@ -62,11 +62,15 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     df["MACD"]        = macd
     df["MACD_Signal"] = macd_sig
 
-    # Only dropna if we actually created any of those columns
+    # Safely drop rows with any NA in our new cols
     wanted = [ma_col, rsi_col, "MACD", "MACD_Signal"]
     present = [c for c in wanted if c in df.columns]
     if present:
-        df = df.dropna(subset=present).reset_index(drop=True)
+        try:
+            df = df.dropna(subset=present).reset_index(drop=True)
+        except KeyError:
+            # if any subset name slipped through, just skip the dropna
+            pass
 
     return df
 
@@ -77,7 +81,7 @@ def build_composite(df):
     ma    = df[f"MA{ma_window}"].to_numpy()
     rs    = df[f"RSI{rsi_period}"].to_numpy()
     mc    = df["MACD"].to_numpy()
-    ms    = df["MACD_Signal"].to_numpy()
+    msig  = df["MACD_Signal"].to_numpy()
 
     df["MA_Signal"]    = 0
     df["RSI_Signal"]   = 0
@@ -99,13 +103,17 @@ def build_composite(df):
             df.at[i, "RSI_Signal"] = -1
 
         # MACD crossover
-        if mc[i-1] < ms[i-1] and mc[i] > ms[i]:
+        if mc[i-1] < msig[i-1] and mc[i] > msig[i]:
             df.at[i, "MACD_Signal2"] = 1
-        elif mc[i-1] > ms[i-1] and mc[i] < ms[i]:
+        elif mc[i-1] > msig[i-1] and mc[i] < msig[i]:
             df.at[i, "MACD_Signal2"] = -1
 
-        # Composite
-        tot = df.at[i, "MA_Signal"] + df.at[i, "RSI_Signal"] + df.at[i, "MACD_Signal2"]
+        # Composite & trade
+        tot = (
+            df.at[i, "MA_Signal"]
+          + df.at[i, "RSI_Signal"]
+          + df.at[i, "MACD_Signal2"]
+        )
         df.at[i, "Composite"] = tot
         df.at[i, "Trade"]     = np.sign(tot)
 
@@ -122,13 +130,16 @@ def backtest(df):
 
     dd      = df["CumStrat"] / df["CumStrat"].cummax() - 1
     max_dd  = dd.min() * 100
-    sharpe  = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
+    if df["StratRet"].std() != 0:
+        sharpe  = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
+    else:
+        sharpe = float("nan")
     win_rt  = (df["StratRet"] > 0).mean() * 100
 
     return df, max_dd, sharpe, win_rt
 
 # ───────────────────────────── Single‐Ticker Backtest ─────────────────────────────
-st.markdown("### Single‐Ticker Backtest")
+st.markdown("## Single‐Ticker Backtest")
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
 
 if st.button("▶️ Run Composite Backtest"):
@@ -146,22 +157,24 @@ if st.button("▶️ Run Composite Backtest"):
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
-**Buy & Hold:** {bh_ret:.2f}%  
-**Strategy:**   {strat_ret:.2f}%  
-**Sharpe:**     {sharpe:.2f}  
-**Max Drawdown:** {max_dd:.2f}%  
-**Win Rate:**     {win_rt:.1f}%  
+- **Buy & Hold:** {bh_ret:.2f}%  
+- **Strategy:**   {strat_ret:.2f}%  
+- **Sharpe:**     {sharpe:.2f}  
+- **Max Drawdown:** {max_dd:.2f}%  
+- **Win Rate:**     {win_rt:.1f}%  
     """)
 
     # Plot
     fig, axes = plt.subplots(3,1,figsize=(10,12),sharex=True)
-    axes[0].plot(df["Close"], label="Close");        axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}")
+    axes[0].plot(df["Close"], label="Close")
+    axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}")
     axes[0].legend(); axes[0].set_title("Price & MA")
 
     axes[1].bar(df.index, df["Composite"], color="purple")
     axes[1].set_title("Composite Vote")
 
-    axes[2].plot(df["CumBH"],":", label="Buy & Hold"); axes[2].plot(df["CumStrat"],"-", label="Strategy")
+    axes[2].plot(df["CumBH"],":", label="Buy & Hold")
+    axes[2].plot(df["CumStrat"],"-", label="Strategy")
     axes[2].legend(); axes[2].set_title("Equity Curves")
 
     plt.xticks(rotation=45); plt.tight_layout()
@@ -169,7 +182,7 @@ if st.button("▶️ Run Composite Backtest"):
 
 # ───────────────────────────── Batch Backtest ─────────────────────────────
 st.markdown("---")
-st.markdown("### Batch Backtest")
+st.markdown("## Batch Backtest")
 batch = st.text_area("Enter tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
 
 if st.button("▶️ Run Batch Backtest"):
