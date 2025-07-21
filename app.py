@@ -5,25 +5,29 @@ import datetime
 import matplotlib.pyplot as plt
 import openai
 
-# ✅ OpenRouter API key from secrets
+# ✅ Load API key from Streamlit secrets
 openai.api_key = st.secrets["OPENROUTER_API_KEY"]
 openai.api_base = "https://openrouter.ai/api/v1"
 
 st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 st.title("🚀 QuantaraX — Smart Signal Engine")
 
-# 📈 Fetch 30 days of historical price data
+# -----------------------------------
+# 📈 Fetch 30 days of historical data
+# -----------------------------------
 def get_data(ticker):
     end = datetime.datetime.today()
     start = end - datetime.timedelta(days=30)
     df = yf.download(ticker, start=start, end=end)
     return df
 
-# 🤖 Use OpenRouter to generate a market commentary
+# -----------------------------------
+# 🤖 Generate LLM commentary
+# -----------------------------------
 def get_llm_commentary(ticker, signal):
     try:
         response = openai.chat.completions.create(
-            model="openrouter/openai/gpt-3.5-turbo",
+            model="mistralai/mistral-7b-instruct",  # You can change this if needed
             messages=[
                 {"role": "system", "content": "You are a financial analyst summarizing market signals for traders and investors."},
                 {"role": "user", "content": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?"}
@@ -33,7 +37,9 @@ def get_llm_commentary(ticker, signal):
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
-# 📊 Analyze moving average signal and plot
+# -----------------------------------
+# 📊 Analyze a ticker
+# -----------------------------------
 def analyze_ticker(ticker):
     df = get_data(ticker)
     if df.empty or len(df) < 10:
@@ -64,12 +70,16 @@ def analyze_ticker(ticker):
 
     return {"ticker": ticker, "insight": signal, "chart": fig, "commentary": commentary}
 
-# 🔍 Ticker list
+# -----------------------------------
+# 🔍 Analyze all tickers
+# -----------------------------------
 def get_top_signals():
     tickers = ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
     return [analyze_ticker(t) for t in tickers]
 
+# -----------------------------------
 # 🖱️ Streamlit UI
+# -----------------------------------
 if st.button("🔍 Generate Today's Signals"):
     signals = get_top_signals()
     for sig in signals:
