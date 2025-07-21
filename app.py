@@ -11,34 +11,32 @@ st.subheader("🔍 Generate Today's Signals")
 # Input field
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
-# Function to generate signal
+# Signal function
 def get_signals(ticker):
     try:
         df = yf.download(ticker, period="1mo")
 
-        if df.empty or df.shape[0] < 11:
-            return df, "⚠️ Not enough data to generate signals."
+        if df.empty or df.shape[0] < 12:
+            return df, "⚠️ Not enough data to compute signals."
 
         df["MA_10"] = df["Close"].rolling(window=10).mean()
-        df = df.dropna(subset=["MA_10"])
+        df = df.dropna()
 
-        if df.shape[0] < 2:
-            return df, "⚠️ Not enough post-MA data to compare crossovers."
+        if "MA_10" not in df.columns or df.shape[0] < 2:
+            return df, "⚠️ MA_10 not found or insufficient rows."
 
+        # Safe access to last two rows
         latest_close = df["Close"].iloc[-1]
         prev_close = df["Close"].iloc[-2]
         latest_ma = df["MA_10"].iloc[-1]
         prev_ma = df["MA_10"].iloc[-2]
 
-        if pd.notna(latest_close) and pd.notna(prev_close) and pd.notna(latest_ma) and pd.notna(prev_ma):
-            if latest_close > latest_ma and prev_close < prev_ma:
-                signal = "✅ Bullish crossover"
-            elif latest_close < latest_ma and prev_close > prev_ma:
-                signal = "❌ Bearish crossover"
-            else:
-                signal = "No crossover"
+        if latest_close > latest_ma and prev_close < prev_ma:
+            signal = "✅ Bullish crossover"
+        elif latest_close < latest_ma and prev_close > prev_ma:
+            signal = "❌ Bearish crossover"
         else:
-            signal = "⚠️ Insufficient valid values to compare."
+            signal = "No crossover"
 
         return df, signal
 
