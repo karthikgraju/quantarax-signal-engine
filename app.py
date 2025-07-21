@@ -1,93 +1,60 @@
 import streamlit as st
 import yfinance as yf
-import matplotlib.pyplot as plt
-import requests
-import json
 import pandas as pd
+import plotly.graph_objs as go
 
-st.set_page_config(page_title="QuantaraX — Smart Signal Engine")
+st.set_page_config(page_title="QuantaraX — Signal Engine", page_icon="🚀")
 
 st.title("🚀 QuantaraX — Smart Signal Engine")
-st.markdown("### 🔍 Generate Today's Signals")
+st.subheader("🔍 Generate Today's Signals")
 
-ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", value="AAPL")
-generate = st.button("📊 Generate Today's Signals")
+# Input field
+ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
-hf_api_key = st.secrets.get("HUGGINGFACE_API_KEY")
-
+# Function to generate signal
 def get_signals(ticker):
     try:
         df = yf.download(ticker, period="1mo")
+
         if df.empty or df.shape[0] < 11:
             return df, "⚠️ Not enough data to generate signals."
 
         df["MA_10"] = df["Close"].rolling(window=10).mean()
+        df = df.dropna(subset=["MA_10"])
+
+        if df.shape[0] < 2:
+            return df, "⚠️ Not enough post-MA data to compare crossovers."
 
         latest_close = df["Close"].iloc[-1]
         prev_close = df["Close"].iloc[-2]
         latest_ma = df["MA_10"].iloc[-1]
         prev_ma = df["MA_10"].iloc[-2]
 
-        signal = ""
-        if latest_close > latest_ma and prev_close < prev_ma:
-            signal = "✅ Bullish crossover"
-        elif latest_close < latest_ma and prev_close > prev_ma:
-            signal = "❌ Bearish crossover"
+        if pd.notna(latest_close) and pd.notna(prev_close) and pd.notna(latest_ma) and pd.notna(prev_ma):
+            if latest_close > latest_ma and prev_close < prev_ma:
+                signal = "✅ Bullish crossover"
+            elif latest_close < latest_ma and prev_close > prev_ma:
+                signal = "❌ Bearish crossover"
+            else:
+                signal = "No crossover"
         else:
-            signal = "No crossover"
+            signal = "⚠️ Insufficient valid values to compare."
 
         return df, signal
 
     except Exception as e:
         return pd.DataFrame(), f"❌ Error retrieving signals: {str(e)}"
 
-def get_llm_insight(signal_text):
-    if not hf_api_key:
-        return "Hugging Face API key not found in secrets."
+# Button to trigger
+if st.button("📊 Generate Today's Signals"):
+    df, signal = get_signals(ticker.upper())
 
-    headers = {
-        "Authorization": f"Bearer {hf_api_key}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "inputs": f"Explain this trading signal: {signal_text}"
-    }
-
-    try:
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
-            headers=headers,
-            data=json.dumps(payload)
-        )
-
-        if response.status_code != 200:
-            return f"LLM Error: {response.status_code} - {response.text}"
-
-        output = response.json()
-        return output[0]["generated_text"]
-
-    except Exception as e:
-        return f"LLM Error: {str(e)}"
-
-if generate:
-    df, signal = get_signals(ticker)
-    st.markdown(f"### {ticker}: {signal}")
+    st.markdown(f"### {ticker.upper()}: {signal}")
 
     if not df.empty and "MA_10" in df.columns:
-        fig, ax = plt.subplots()
-        ax.plot(df.index, df["Close"], label="Close", color="blue")
-        ax.plot(df.index, df["MA_10"], label="MA 10", color="orange")
-        ax.set_title(f"{ticker} Price & MA 10")
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.legend()
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-        st.markdown("**LLM Insight:**")
-        with st.spinner("Thinking..."):
-            insight = get_llm_insight(signal)
-            st.markdown(insight)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name='Close', line=dict(color='royalblue')))
+        fig.add_trace(go.Scatter(x=df.index, y=df["MA_10"], name='MA_10', line=dict(color='orange')))
+        st.plotly_chart(fig)
     else:
         st.warning("Chart cannot be displayed due to insufficient data.")
