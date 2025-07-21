@@ -5,8 +5,8 @@ import datetime
 import matplotlib.pyplot as plt
 import openai
 
-# ✅ Set your OpenRouter API Key and Base
-openai.api_key = "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"
+# ✅ Securely load API key from Streamlit Secrets
+openai.api_key = st.secrets["OPENROUTER_API_KEY"]
 openai.api_base = "https://openrouter.ai/api/v1"
 
 st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
@@ -26,14 +26,14 @@ def get_data(ticker):
 # -----------------------------------
 def get_llm_commentary(ticker, signal):
     try:
-        response = openai.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="openai/gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a financial analyst summarizing market signals for traders and investors."},
                 {"role": "user", "content": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?"}
             ]
         )
-        return response.choices[0].message.content
+        return response['choices'][0]['message']['content']
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
