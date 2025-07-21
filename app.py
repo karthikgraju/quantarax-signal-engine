@@ -27,7 +27,7 @@ def get_data(ticker):
 def get_llm_commentary(ticker, signal):
     try:
         response = openai.ChatCompletion.create(
-            model="openai/gpt-3.5-turbo",  # or mistralai/mixtral-8x7b etc.
+            "mistralai/mixtral-8x7b",  # or mistralai/mixtral-8x7b etc.
             messages=[
                 {
                     "role": "system",
