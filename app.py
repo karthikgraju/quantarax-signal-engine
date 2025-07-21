@@ -5,41 +5,43 @@ import datetime
 import matplotlib.pyplot as plt
 import openai
 
-# ✅ Securely load API key from Streamlit Secrets
-openai.api_key = st.secrets["OPENROUTER_API_KEY"]
-openai.api_base = "https://openrouter.ai/api/v1"
+# --- Load OpenRouter key from secrets ---
+client = openai.OpenAI(
+    api_key=st.secrets["OPENAI_API_KEY"],  # Make sure it's in .streamlit/secrets.toml
+    base_url="https://openrouter.ai/api/v1"
+)
 
 st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 st.title("🚀 QuantaraX — Smart Signal Engine")
 
-# -----------------------------------
-# 📈 Fetch 30 days of historical data
-# -----------------------------------
+# -----------------------------------------
+# 📈 Fetch 30 days of historical price data
+# -----------------------------------------
 def get_data(ticker):
     end = datetime.datetime.today()
     start = end - datetime.timedelta(days=30)
     df = yf.download(ticker, start=start, end=end)
     return df
 
-# -----------------------------------
+# -----------------------------------------
 # 🤖 Generate LLM commentary
-# -----------------------------------
+# -----------------------------------------
 def get_llm_commentary(ticker, signal):
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="openai/gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a financial analyst summarizing market signals for traders and investors."},
                 {"role": "user", "content": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?"}
             ]
         )
-        return response['choices'][0]['message']['content']
+        return response.choices[0].message.content
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
-# -----------------------------------
-# 📊 Analyze a ticker
-# -----------------------------------
+# -----------------------------------------
+# 🔍 Analyze a single ticker
+# -----------------------------------------
 def analyze_ticker(ticker):
     df = get_data(ticker)
     if df.empty or len(df) < 10:
@@ -70,16 +72,16 @@ def analyze_ticker(ticker):
 
     return {"ticker": ticker, "insight": signal, "chart": fig, "commentary": commentary}
 
-# -----------------------------------
-# 🔍 Analyze all tickers
-# -----------------------------------
+# -----------------------------------------
+# 🔁 Analyze top tickers
+# -----------------------------------------
 def get_top_signals():
     tickers = ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
     return [analyze_ticker(t) for t in tickers]
 
-# -----------------------------------
-# 🖱️ Streamlit UI
-# -----------------------------------
+# -----------------------------------------
+# 🖱️ UI Logic
+# -----------------------------------------
 if st.button("🔍 Generate Today's Signals"):
     signals = get_top_signals()
     for sig in signals:
