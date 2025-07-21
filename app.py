@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from itertools import product
 
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
@@ -14,29 +13,28 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 with tab_help:
     st.header("How QuantaraX Works")
     st.markdown("""
-**QuantaraX** combines three technical indicators into a single “composite” vote:
+**QuantaraX** combines three indicators into a single composite vote:
 
-1. **Moving Average (MA) Crossover**  
-   - Computes a simple MA over the last *N* days.  
-   - **Bull** when price crosses *above* the MA, **Bear** when it crosses *below*.
+1. **Moving Average Crossover**  
+   - Simple MA over *N* days. Bull when price crosses above, bear when below.
 
-2. **Relative Strength Index (RSI)**  
-   - A momentum oscillator over a lookback period.  
-   - **Bull** if RSI < 30 (oversold), **Bear** if RSI > 70 (overbought).
+2. **RSI**  
+   - Momentum oscillator. Bull if RSI < 30 (oversold), bear if RSI > 70 (overbought).
 
 3. **MACD Crossover**  
-   - Difference of two EMAs (fast & slow spans) plus a signal‐line EMA.  
-   - **Bull** when MACD crosses above its signal line, **Bear** on the flip.
+   - EMA fast vs. slow difference + signal line. Bull on crossover up, bear on crossover down.
 
-Each indicator issues +1 (bull), –1 (bear) or 0 (neutral). We sum these into a  
-**Composite Vote** (–3…+3) and go long/flat based on its sign:
+Each gives +1 (bull), –1 (bear), or 0 (neutral). Sum them (–3…+3) →  
+**Composite**. We then take a long/flat position based on sign(composite):
 
 - Composite ≥ +1 → **BUY**  
 - Composite ≤ –1 → **SELL**  
-- Composite = 0  → **HOLD**
+- Composite =  0 → **HOLD**
 
-Below, under **Engine**, you can backtest a single ticker, batch test many,  
-or grid‐search your MA/RSI/MACD parameters for the best simulated returns.
+Below under **Engine** you can:
+- Backtest a single ticker  
+- Batch test many  
+- Grid‐search indicator parameters  
 """)
 
 with tab_engine:
@@ -65,14 +63,7 @@ with tab_engine:
     macd_slow   = st.sidebar.slider("MACD slow span",  20, 40, st.session_state["macd_slow"],   key="macd_slow")
     macd_signal = st.sidebar.slider("MACD signal span", 5, 20, st.session_state["macd_signal"], key="macd_signal")
 
-    st.sidebar.markdown("---")
-    st.sidebar.header("Grid-Search Parameters")
-    ma_list   = st.sidebar.multiselect("MA windows",      [5,10,15,20,30], default=[ma_window],  key="grid_ma")
-    rsi_list  = st.sidebar.multiselect("RSI lookbacks",   [7,14,21,28],   default=[rsi_period], key="grid_rsi")
-    mf_list   = st.sidebar.multiselect("MACD fast spans", [8,12,16,20],   default=[macd_fast],  key="grid_mf")
-    ms_list   = st.sidebar.multiselect("MACD slow spans", [20,26,32,40], default=[macd_slow],  key="grid_ms")
-    sg_list   = st.sidebar.multiselect("MACD sig spans",  [5,9,12,16],    default=[macd_signal],key="grid_sig")
-
+    # ───────────────────────────── Page Title ─────────────────────────────
     st.title("🚀 QuantaraX — Composite Signal Engine")
     st.write("MA + RSI + MACD Composite Signals & Backtest")
 
@@ -83,7 +74,7 @@ with tab_engine:
         if df.empty or "Close" not in df:
             return pd.DataFrame()
 
-        # 1) MA
+        # 1) Moving Average
         ma_col = f"MA{ma_w}"
         df[ma_col] = df["Close"].rolling(ma_w).mean()
 
@@ -100,14 +91,18 @@ with tab_engine:
         ema_f = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s = df["Close"].ewm(span=ms, adjust=False).mean()
         macd  = ema_f - ema_s
+        macd_sig = macd.ewm(span=sig, adjust=False).mean()
         df["MACD"]        = macd
-        df["MACD_Signal"] = macd.ewm(span=sig, adjust=False).mean()
+        df["MACD_Signal"] = macd_sig
 
-        # 4) Drop only the columns we created
+        # 4) Safely drop NA rows for created columns
         wanted = [ma_col, rsi_col, "MACD", "MACD_Signal"]
         present = [c for c in wanted if c in df.columns]
         if present:
-            df = df.dropna(subset=present).reset_index(drop=True)
+            try:
+                df = df.dropna(subset=present).reset_index(drop=True)
+            except KeyError:
+                pass
 
         return df
 
@@ -131,12 +126,10 @@ with tab_engine:
                 ma_sig[i] =  1
             elif close_arr[i-1] > ma_arr[i-1] and close_arr[i] < ma_arr[i]:
                 ma_sig[i] = -1
-
             if rsi_arr[i] < 30:
                 rsi_sig[i] =  1
             elif rsi_arr[i] > 70:
                 rsi_sig[i] = -1
-
             if macd_arr[i-1] < sig_arr[i-1] and macd_arr[i] > sig_arr[i]:
                 macd_sig2[i] =  1
             elif macd_arr[i-1] > sig_arr[i-1] and macd_arr[i] < sig_arr[i]:
@@ -145,6 +138,9 @@ with tab_engine:
             comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
             trade[i] = np.sign(comp[i])
 
+        df["MA_Signal"]    = ma_sig
+        df["RSI_Signal"]   = rsi_sig
+        df["MACD_Signal2"] = macd_sig2
         df["Composite"]    = comp
         df["Trade"]        = trade
         return df
@@ -161,7 +157,7 @@ with tab_engine:
         dd      = df["CumStrat"] / df["CumStrat"].cummax() - 1
         max_dd  = dd.min() * 100
         std_dev = df["StratRet"].std()
-        sharpe  = (df["StratRet"].mean() / std_dev * np.sqrt(252)) if std_dev else np.nan
+        sharpe  = (df["StratRet"].mean() / std_dev * np.sqrt(252)) if std_dev != 0 else np.nan
         win_rt  = (df["StratRet"] > 0).mean() * 100
 
         return df, max_dd, sharpe, win_rt
@@ -173,22 +169,34 @@ with tab_engine:
     if st.button("▶️ Run Composite Backtest"):
         df = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
         if df.empty:
-            st.error(f"No data for '{ticker}'.")
-            st.stop()
+            st.error(f"No data for '{ticker}'."); st.stop()
 
         df = build_composite(df, ma_window, rsi_period)
         df, max_dd, sharpe, win_rt = backtest(df)
 
-        rec_map = { 1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL" }
-        st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
-        bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
+        rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
+        last_trade = int(df["Trade"].iloc[-1])
+        st.success(f"**{ticker}**: {rec_map[last_trade]}")
+
+        bh_ret = (df["CumBH"].iloc[-1] - 1) * 100
         strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
-        st.markdown(f"- **B&H:** {bh_ret:.2f}%   - **Strat:** {strat_ret:.2f}%   - **Sharpe:** {sharpe:.2f}%   - **MaxDD:** {max_dd:.2f}%   - **Win%:** {win_rt:.1f}%")
+        st.markdown(f"""
+- **Buy & Hold:**    {bh_ret:.2f}%  
+- **Strategy:**      {strat_ret:.2f}%  
+- **Sharpe:**        {sharpe:.2f}  
+- **Max Drawdown:**  {max_dd:.2f}%  
+- **Win Rate:**      {win_rt:.1f}%  
+        """)
 
         fig, axes = plt.subplots(3,1,figsize=(10,12),sharex=True)
-        axes[0].plot(df["Close"], label="Close"); axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}"); axes[0].legend(); axes[0].set_title("Price & MA")
-        axes[1].bar(df.index, df["Composite"], color="purple"); axes[1].set_title("Composite Vote")
-        axes[2].plot(df["CumBH"], ":", label="B&H"); axes[2].plot(df["CumStrat"], "-", label="Strategy"); axes[2].legend(); axes[2].set_title("Equity Curves")
+        axes[0].plot(df["Close"], label="Close")
+        axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}")
+        axes[0].set_title("Price & MA"); axes[0].legend()
+        axes[1].bar(df.index, df["Composite"], color="purple")
+        axes[1].set_title("Composite Vote")
+        axes[2].plot(df["CumBH"], ":", label="Buy & Hold")
+        axes[2].plot(df["CumStrat"], "-", label="Strategy")
+        axes[2].set_title("Equity Curves"); axes[2].legend()
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
@@ -199,10 +207,9 @@ with tab_engine:
 
     if st.button("▶️ Run Batch Backtest"):
         perf = []
-        for t in [s.strip() for s in batch.split(",") if s.strip()]:
+        for t in [s.strip() for s in batch.split(",") if s.strip()]:  
             df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-            if df_t.empty:
-                continue
+            if df_t.empty: continue
             df_t = build_composite(df_t, ma_window, rsi_period)
             df_t, max_dd, sharpe, win_rt = backtest(df_t)
             perf.append({
@@ -220,43 +227,51 @@ with tab_engine:
         else:
             df_perf = pd.DataFrame(perf).set_index("Ticker")
             st.dataframe(df_perf)
-            st.download_button("Download CSV", df_perf.to_csv(), "batch_perf.csv")
+            st.download_button("Download performance CSV", df_perf.to_csv(), "batch_perf.csv")
 
     # ───────────────────────────── Hyperparameter Optimization ─────────────────────────────
     st.markdown("---")
-    st.markdown("## Hyperparameter Optimization")
+    st.markdown("## 🛠️ Hyperparameter Optimization")
+    ma_list   = st.sidebar.multiselect("MA windows to test",     [5,10,15,20,30], default=[ma_window],   key="grid_ma")
+    rsi_list  = st.sidebar.multiselect("RSI lookbacks to test",  [7,14,21,28],   default=[rsi_period], key="grid_rsi")
+    mf_list   = st.sidebar.multiselect("MACD fast spans to test",[8,12,16,20],  default=[macd_fast],   key="grid_mf")
+    ms_list   = st.sidebar.multiselect("MACD slow spans to test",[20,26,32,40],default=[macd_slow],   key="grid_ms")
+    sig_list  = st.sidebar.multiselect("MACD sig spans to test", [5,9,12,16],   default=[macd_signal], key="grid_sig")
+
     if st.button("🏃‍♂️ Run Grid Search"):
         if not ticker:
-            st.error("Enter a ticker above.")
-            st.stop()
-        df_base = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-        if df_base.empty:
-            st.error(f"No data for {ticker}")
-            st.stop()
+            st.error("Enter a ticker above."); st.stop()
+
+        df_full = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
+        if df_full.empty:
+            st.error(f"No data for {ticker}"); st.stop()
+
         results = []
-        with st.spinner("Testing combos…"):
+        with st.spinner("Testing combinations..."):
             for ma_w in ma_list:
                 for rsi_p in rsi_list:
                     for mf in mf_list:
                         for ms in ms_list:
-                            for sg in sg_list:
-                                df_i = load_and_compute(ticker, ma_w, rsi_p, mf, ms, sg)
+                            for s in sig_list:
+                                df_i = load_and_compute(ticker, ma_w, rsi_p, mf, ms, s)
                                 if df_i.empty:
                                     continue
+
                                 df_i = build_composite(df_i, ma_w, rsi_p)
                                 df_i, max_dd, sharpe_i, win_rt_i = backtest(df_i)
-                                strat_pct = (df_i["CumStrat"].iloc[-1] - 1) * 100
+                                strat_ret = (df_i["CumStrat"].iloc[-1] - 1) * 100
+
                                 results.append({
                                     "MA": ma_w, "RSI": rsi_p,
-                                    "MF": mf, "MS": ms, "SG": sg,
-                                    "Strat %": strat_pct,
-                                    "Sharpe": sharpe_i,
-                                    "MaxDD %": max_dd,
-                                    "Win %": win_rt_i
+                                    "MACD_Fast": mf, "MACD_Slow": ms, "MACD_Sig": s,
+                                    "Strategy %": strat_ret, "Sharpe": sharpe_i,
+                                    "MaxDD %": max_dd, "Win %": win_rt_i
                                 })
+
         if not results:
             st.error("No valid parameter combos.")
         else:
-            df_grid = pd.DataFrame(results).sort_values("Strat %", ascending=False).reset_index(drop=True)
+            df_grid = pd.DataFrame(results).sort_values("Strategy %", ascending=False).reset_index(drop=True)
             st.dataframe(df_grid.head(10), use_container_width=True)
-            st.download_button("Download CSV", df_grid.to_csv(index=False), "grid_search.csv")
+            csv = df_grid.to_csv(index=False)
+            st.download_button("Download full grid CSV", csv, "grid_search.csv")
