@@ -1,95 +1,88 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
-import datetime
 import matplotlib.pyplot as plt
+import pandas as pd
 import requests
+import datetime
 
-st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
+st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="centered")
+
 st.title("🚀 QuantaraX — Smart Signal Engine")
 
-# -----------------------------------
-# 📈 Fetch 30 days of historical data
-# -----------------------------------
-def get_data(ticker):
-    end = datetime.datetime.today()
-    start = end - datetime.timedelta(days=30)
-    df = yf.download(ticker, start=start, end=end)
-    return df
+st.markdown("### 🔍 Generate Today's Signals")
 
-# -----------------------------------
-# 🤖 Generate commentary using Hugging Face model
-# -----------------------------------
-def get_llm_commentary(ticker, signal):
-    try:
-        headers = {
-            "Authorization": f"Bearer {st.secrets['HF_TOKEN']}"
-        }
-        payload = {
-            "inputs": f"What does it mean for investors when {ticker} shows the signal: '{signal}'?",
-        }
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-        result = response.json()
-        if isinstance(result, list) and "generated_text" in result[0]:
-            return result[0]["generated_text"]
-        else:
-            return f"LLM Error: {result}"
-    except Exception as e:
-        return f"LLM Error: {str(e)}"
+# --------------- CONFIGURATION --------------------
+TICKERS = ["AAPL", "MSFT", "NVDA", "GOOGL"]
+HUGGINGFACE_API_KEY = st.secrets["HUGGINGFACE_API_KEY"]
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/google/flan-t5-small"
 
-# -----------------------------------
-# 📊 Analyze a ticker
-# -----------------------------------
-def analyze_ticker(ticker):
-    df = get_data(ticker)
-    if df.empty or len(df) < 10:
-        return {"ticker": ticker, "insight": "⚠️ Not enough data", "chart": None, "commentary": None}
+HEADERS = {
+    "Authorization": f"Bearer {HUGGINGFACE_API_KEY}"
+}
+# --------------------------------------------------
 
+def get_signals(ticker):
+    today = datetime.date.today()
+    df = yf.download(ticker, period="1mo")
     df["MA_10"] = df["Close"].rolling(window=10).mean()
+    
+    signal = ""
+    if df["Close"].iloc[-1] > df["MA_10"].iloc[-1] and df["Close"].iloc[-2] < df["MA_10"].iloc[-2]:
+        signal = "Bullish crossover"
+    elif df["Close"].iloc[-1] < df["MA_10"].iloc[-1] and df["Close"].iloc[-2] > df["MA_10"].iloc[-2]:
+        signal = "Bearish crossover"
+    
+    return df, signal
 
-    try:
-        last_close = float(df["Close"].iloc[-1])
-        last_ma = float(df["MA_10"].iloc[-1])
+def generate_llm_insight(prompt):
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "temperature": 0.7,
+            "max_new_tokens": 150
+        }
+    }
+    response = requests.post(HF_MODEL_URL, headers=HEADERS, json=payload)
 
-        if pd.isna(last_ma):
-            signal = "⚠️ MA data not ready"
-        elif last_close > last_ma:
-            signal = "✅ Bullish crossover"
+    # Handle cold start
+    import time
+    while response.status_code == 202:
+        st.info("Model warming up... please wait.")
+        time.sleep(3)
+        response = requests.post(HF_MODEL_URL, headers=HEADERS, json=payload)
+
+    if response.status_code == 200:
+        result = response.json()
+        return result[0]["generated_text"] if isinstance(result, list) else result
+    else:
+        return f"LLM Error: {response.status_code} - {response.text}"
+
+if st.button("🔎 Generate Today's Signals"):
+    for ticker in TICKERS:
+        df, signal = get_signals(ticker)
+        
+        if signal:
+            st.markdown(f"### {ticker}: ✅ **{signal}**")
         else:
-            signal = "📉 Bearish or Neutral"
-    except Exception as e:
-        signal = f"❌ Error: {str(e)}"
+            st.markdown(f"### {ticker}: ❌ No clear signal")
+        
+        # Chart
+        fig, ax = plt.subplots()
+        df["Close"].plot(ax=ax, label=ticker, color="blue")
+        df["MA_10"].plot(ax=ax, label="MA 10", color="orange")
+        ax.set_title(f"{ticker} Price & 10-Day Moving Average")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
+        ax.legend()
+        st.pyplot(fig)
 
-    fig, ax = plt.subplots()
-    df["Close"].plot(ax=ax, label=ticker, color="blue")
-    df["MA_10"].plot(ax=ax, label="MA 10", color="orange")
-    ax.set_title(f"{ticker} Price & 10-Day Moving Average")
-    ax.legend()
-
-    commentary = get_llm_commentary(ticker, signal)
-
-    return {"ticker": ticker, "insight": signal, "chart": fig, "commentary": commentary}
-
-# -----------------------------------
-# 🔍 Analyze all tickers
-# -----------------------------------
-def get_top_signals():
-    tickers = ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
-    return [analyze_ticker(t) for t in tickers]
-
-# -----------------------------------
-# 🖱️ Streamlit UI
-# -----------------------------------
-if st.button("🔍 Generate Today's Signals"):
-    signals = get_top_signals()
-    for sig in signals:
-        st.subheader(f"{sig['ticker']}: {sig['insight']}")
-        if sig["chart"]:
-            st.pyplot(sig["chart"])
-        if sig["commentary"]:
-            st.markdown(f"**LLM Insight:** {sig['commentary']}")
+        # LLM Insight
+        st.markdown("**LLM Insight:**")
+        try:
+            prompt = f"Explain this {signal.lower()} signal in simple terms for {ticker}."
+            if not signal:
+                prompt = f"Explain why there might be no technical signal for {ticker} today."
+            llm_result = generate_llm_insight(prompt)
+            st.write(llm_result)
+        except Exception as e:
+            st.error(f"LLM Error: {str(e)}")
