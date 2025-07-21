@@ -8,46 +8,40 @@ st.set_page_config(page_title="QuantaraX — Smart Signal Engine")
 st.markdown("🚀 **QuantaraX — Smart Signal Engine**")
 st.markdown("🔍 **Generate Today's Signals**")
 
-# Ticker input
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
 def get_signals(ticker):
     df = yf.download(ticker, period="90d", interval="1d")
-
     if df.empty or len(df) < 20:
         return None, "⚠️ Not enough data to compute signals."
 
     df["MA_10"] = df["Close"].rolling(window=10).mean()
 
-    # RSI Calculation
     delta = df["Close"].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14).mean()
     avg_loss = loss.rolling(window=14).mean()
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
 
     try:
-        close_yesterday = df["Close"].iloc[-2]
-        close_today = df["Close"].iloc[-1]
-        ma_yesterday = df["MA_10"].iloc[-2]
-        ma_today = df["MA_10"].iloc[-1]
-        rsi_today = df["RSI"].iloc[-1]
-
-        # NaN check for all scalars
-        for val in [close_yesterday, close_today, ma_yesterday, ma_today, rsi_today]:
-            if pd.isna(val):
-                return None, "⚠️ Missing values in time series — cannot compute signal."
+        close_yesterday = df["Close"].iloc[-2].item()
+        close_today = df["Close"].iloc[-1].item()
+        ma_yesterday = df["MA_10"].iloc[-2].item()
+        ma_today = df["MA_10"].iloc[-1].item()
+        rsi_today = df["RSI"].iloc[-1].item()
 
     except Exception as e:
-        return None, f"⚠️ Error extracting values: {str(e)}"
+        return None, f"⚠️ Error extracting values: {e}"
 
-    # Signal logic
+    if any(pd.isna(x) for x in [close_yesterday, close_today, ma_yesterday, ma_today, rsi_today]):
+        return None, "⚠️ One or more key values are NaN — cannot compute signal."
+
     signal = "📉 No crossover"
-    if (close_yesterday < ma_yesterday) and (close_today > ma_today):
+    if close_yesterday < ma_yesterday and close_today > ma_today:
         signal = "🔼 Bullish crossover"
-    elif (close_yesterday > ma_yesterday) and (close_today < ma_today):
+    elif close_yesterday > ma_yesterday and close_today < ma_today:
         signal = "🔽 Bearish crossover"
     elif rsi_today < 30:
         signal = "🟢 RSI Oversold — Consider Buy"
