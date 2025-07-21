@@ -4,20 +4,44 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ─ Streamlit page config ─────────────────────────────────────────────────
+# ──────────────────────────── Reset Defaults Setup ────────────────────────────
+DEFAULTS = {
+    "ma_window":   10,
+    "rsi_period":  14,
+    "macd_fast":   12,
+    "macd_slow":   26,
+    "macd_signal":  9
+}
+
+st.sidebar.header("Controls")
+if st.sidebar.button("🔄 Reset to defaults"):
+    for key, val in DEFAULTS.items():
+        st.session_state[key] = val
+
+# ──────────────────────────── Sidebar Sliders ────────────────────────────────
+st.sidebar.header("Indicator Parameters")
+ma_window   = st.sidebar.slider(
+    "MA window", 5, 50, DEFAULTS["ma_window"], key="ma_window"
+)
+rsi_period  = st.sidebar.slider(
+    "RSI lookback", 5, 30, DEFAULTS["rsi_period"], key="rsi_period"
+)
+macd_fast   = st.sidebar.slider(
+    "MACD fast span", 5, 20, DEFAULTS["macd_fast"], key="macd_fast"
+)
+macd_slow   = st.sidebar.slider(
+    "MACD slow span", 20, 40, DEFAULTS["macd_slow"], key="macd_slow"
+)
+macd_signal = st.sidebar.slider(
+    "MACD signal span", 5, 20, DEFAULTS["macd_signal"], key="macd_signal"
+)
+
+# ──────────────────────────── Page Config & Title ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
 st.title("🚀 QuantaraX — Composite Signal Engine")
 st.subheader("MA + RSI + MACD Composite Signals & Backtest")
 
-# ─ Sidebar: parameter controls ─────────────────────────────────────────────
-st.sidebar.header("Indicator Parameters")
-ma_window   = st.sidebar.slider("MA window",        5, 50, 10)
-rsi_period  = st.sidebar.slider("RSI lookback",     5, 30, 14)
-macd_fast   = st.sidebar.slider("MACD fast span",   5, 20, 12)
-macd_slow   = st.sidebar.slider("MACD slow span",  20, 40, 26)
-macd_signal = st.sidebar.slider("MACD signal span", 5, 20,  9)
-
-# ─ Load & compute indicators ───────────────────────────────────────────────
+# ────────────────────────── Load & Compute Indicators ─────────────────────────
 @st.cache_data
 def load_and_compute(
     ticker: str,
@@ -31,7 +55,7 @@ def load_and_compute(
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
 
-    # 1) Moving Average
+    # 1) MA
     df[f"MA{ma_window}"] = df["Close"].rolling(ma_window).mean()
 
     # 2) RSI
@@ -48,7 +72,7 @@ def load_and_compute(
     sig   = macd.ewm(span=macd_signal, adjust=False).mean()
     df["MACD"], df["MACD_Signal"] = macd, sig
 
-    # 4) Filter out rows with any NaN in our key columns
+    # 4) Filter out any rows with NaN in our four key columns
     cols = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
     mask = pd.Series(True, index=df.index)
     for c in cols:
@@ -57,7 +81,7 @@ def load_and_compute(
     df = df.loc[mask].reset_index(drop=True)
     return df
 
-# ─ Build composite signals via pure‐Python loop ──────────────────────────
+# ────────────────────────── Build Composite Signals ──────────────────────────
 def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     n     = len(df)
     close = df["Close"].values
@@ -94,10 +118,10 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI_Signal"]  = rsi_sig
     df["MACD_Signal"] = macd_sig
     df["Composite"]   = comp
-    df["Trade"]       = np.sign(comp)  # +1 BUY, 0 HOLD, -1 SELL
+    df["Trade"]       = np.sign(comp)  # +1 BUY,  0 HOLD,  -1 SELL
     return df
 
-# ─ Backtest & metrics ────────────────────────────────────────────────────
+# ───────────────────────────── Backtest & Metrics ───────────────────────────
 def backtest(df: pd.DataFrame):
     df = df.copy()
     df["Return"]   = df["Close"].pct_change().fillna(0)
@@ -106,20 +130,17 @@ def backtest(df: pd.DataFrame):
     df["CumBH"]    = (1 + df["Return"]).cumprod()
     df["CumStrat"] = (1 + df["StratRet"]).cumprod()
 
-    # drawdown
     dd     = df["CumStrat"] / df["CumStrat"].cummax() - 1
     max_dd = dd.min() * 100
-    # sharpe
     sharpe = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
-    # win rate
     win_rt = (df["StratRet"] > 0).mean() * 100
 
     return df, max_dd, sharpe, win_rt, dd
 
-# ─ Main App ───────────────────────────────────────────────────────────────
+# ─────────────────────────────── Main App ────────────────────────────────────
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
+
 if st.button("▶️ Run Composite Backtest"):
-    # pass all sliders into the cache key so columns always line up
     df = load_and_compute(
         ticker,
         ma_window,
@@ -133,13 +154,13 @@ if st.button("▶️ Run Composite Backtest"):
         st.stop()
 
     df = build_composite(df)
-    df, max_dd, sharpe, win_rate, dd = backtest(df)
+    df, max_dd, sharpe, win_rt, dd = backtest(df)
 
     # Live recommendation
     rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
     st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
 
-    # Metrics
+    # Performance metrics
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
@@ -147,7 +168,7 @@ if st.button("▶️ Run Composite Backtest"):
     **Strategy:** {strat_ret:.2f}%  
     **Sharpe:** {sharpe:.2f}  
     **Max Drawdown:** {max_dd:.2f}%  
-    **Win Rate:** {win_rate:.1f}%  
+    **Win Rate:** {win_rt:.1f}%  
     """)
 
     # Download CSV
@@ -157,8 +178,9 @@ if st.button("▶️ Run Composite Backtest"):
         f"{ticker}_composite_signals.csv"
     )
 
-    # Plot panels
+    # Plots
     fig, axes = plt.subplots(4,1, figsize=(10,14), sharex=True)
+
     axes[0].plot(df["Close"], label="Close")
     axes[0].plot(df[f"MA{ma_window}"], "--", label=f"MA{ma_window}")
     axes[0].set_title("Price & MA"); axes[0].legend()
