@@ -41,11 +41,11 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     if df.empty or "Close" not in df:
         return pd.DataFrame()
 
-    # MA
+    # 1) MOVING AVERAGE
     ma_col = f"MA{ma_w}"
     df[ma_col] = df["Close"].rolling(ma_w).mean()
 
-    # RSI
+    # 2) RSI
     delta    = df["Close"].diff()
     up       = delta.clip(lower=0)
     down     = -delta.clip(upper=0)
@@ -54,7 +54,7 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     rsi_col  = f"RSI{rsi_p}"
     df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
 
-    # MACD
+    # 3) MACD
     ema_f = df["Close"].ewm(span=mf, adjust=False).mean()
     ema_s = df["Close"].ewm(span=ms, adjust=False).mean()
     macd  = ema_f - ema_s
@@ -62,60 +62,62 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     df["MACD"]        = macd
     df["MACD_Signal"] = macd_sig
 
-    # Safely drop rows with any NA in our new cols
-    wanted = [ma_col, rsi_col, "MACD", "MACD_Signal"]
-    present = [c for c in wanted if c in df.columns]
-    if present:
+    # safely drop rows missing *any* of our new cols
+    subset = [c for c in [ma_col, rsi_col, "MACD", "MACD_Signal"] if c in df.columns]
+    if subset:
         try:
-            df = df.dropna(subset=present).reset_index(drop=True)
+            df = df.dropna(subset=subset).reset_index(drop=True)
         except KeyError:
-            # if any subset name slipped through, just skip the dropna
             pass
 
     return df
 
-# ───────────────────────────── Build Composite Signals ─────────────────────────────
+# ───────────────────────────── Build Composite (vectorized) ─────────────────────────────
 def build_composite(df):
-    n     = len(df)
-    cl    = df["Close"].to_numpy()
-    ma    = df[f"MA{ma_window}"].to_numpy()
-    rs    = df[f"RSI{rsi_period}"].to_numpy()
-    mc    = df["MACD"].to_numpy()
-    msig  = df["MACD_Signal"].to_numpy()
+    n = len(df)
+    close_arr = df["Close"].to_numpy()
+    ma_arr    = df[f"MA{ma_window}"].to_numpy()
+    rsi_arr   = df[f"RSI{rsi_period}"].to_numpy()
+    macd_arr  = df["MACD"].to_numpy()
+    sig_arr   = df["MACD_Signal"].to_numpy()
 
-    df["MA_Signal"]    = 0
-    df["RSI_Signal"]   = 0
-    df["MACD_Signal2"] = 0
-    df["Composite"]    = 0
-    df["Trade"]        = 0
+    # allocate
+    ma_sig    = np.zeros(n, dtype=int)
+    rsi_sig   = np.zeros(n, dtype=int)
+    macd_sig2 = np.zeros(n, dtype=int)
+    comp      = np.zeros(n, dtype=int)
+    trade     = np.zeros(n, dtype=int)
 
+    # compute signals from index = 1 onward
     for i in range(1, n):
         # MA crossover
-        if cl[i-1] < ma[i-1] and cl[i] > ma[i]:
-            df.at[i, "MA_Signal"] = 1
-        elif cl[i-1] > ma[i-1] and cl[i] < ma[i]:
-            df.at[i, "MA_Signal"] = -1
+        if close_arr[i-1] < ma_arr[i-1] and close_arr[i] > ma_arr[i]:
+            ma_sig[i] =  1
+        elif close_arr[i-1] > ma_arr[i-1] and close_arr[i] < ma_arr[i]:
+            ma_sig[i] = -1
 
         # RSI thresholds
-        if rs[i] < 30:
-            df.at[i, "RSI_Signal"] = 1
-        elif rs[i] > 70:
-            df.at[i, "RSI_Signal"] = -1
+        if rsi_arr[i] < 30:
+            rsi_sig[i] =  1
+        elif rsi_arr[i] > 70:
+            rsi_sig[i] = -1
 
         # MACD crossover
-        if mc[i-1] < msig[i-1] and mc[i] > msig[i]:
-            df.at[i, "MACD_Signal2"] = 1
-        elif mc[i-1] > msig[i-1] and mc[i] < msig[i]:
-            df.at[i, "MACD_Signal2"] = -1
+        if macd_arr[i-1] < sig_arr[i-1] and macd_arr[i] > sig_arr[i]:
+            macd_sig2[i] =  1
+        elif macd_arr[i-1] > sig_arr[i-1] and macd_arr[i] < sig_arr[i]:
+            macd_sig2[i] = -1
 
-        # Composite & trade
-        tot = (
-            df.at[i, "MA_Signal"]
-          + df.at[i, "RSI_Signal"]
-          + df.at[i, "MACD_Signal2"]
-        )
-        df.at[i, "Composite"] = tot
-        df.at[i, "Trade"]     = np.sign(tot)
+        # composite vote & final trade signal
+        comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
+        trade[i] = np.sign(comp[i])
+
+    # stick back on df
+    df["MA_Signal"]    = ma_sig
+    df["RSI_Signal"]   = rsi_sig
+    df["MACD_Signal2"] = macd_sig2
+    df["Composite"]    = comp
+    df["Trade"]        = trade
 
     return df
 
@@ -130,10 +132,8 @@ def backtest(df):
 
     dd      = df["CumStrat"] / df["CumStrat"].cummax() - 1
     max_dd  = dd.min() * 100
-    if df["StratRet"].std() != 0:
-        sharpe  = df["StratRet"].mean() / df["StratRet"].std() * np.sqrt(252)
-    else:
-        sharpe = float("nan")
+    std     = df["StratRet"].std()
+    sharpe  = (df["StratRet"].mean() / std * np.sqrt(252)) if std != 0 else np.nan
     win_rt  = (df["StratRet"] > 0).mean() * 100
 
     return df, max_dd, sharpe, win_rt
@@ -151,20 +151,19 @@ if st.button("▶️ Run Composite Backtest"):
     df = build_composite(df)
     df, max_dd, sharpe, win_rt = backtest(df)
 
-    rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
+    rec_map = { 1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL" }
     st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
 
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
-- **Buy & Hold:** {bh_ret:.2f}%  
-- **Strategy:**   {strat_ret:.2f}%  
-- **Sharpe:**     {sharpe:.2f}  
-- **Max Drawdown:** {max_dd:.2f}%  
-- **Win Rate:**     {win_rt:.1f}%  
+    - **Buy & Hold:** {bh_ret:.2f}%  
+    - **Strategy:**   {strat_ret:.2f}%  
+    - **Sharpe:**     {sharpe:.2f}  
+    - **Max Drawdown:** {max_dd:.2f}%  
+    - **Win Rate:**     {win_rt:.1f}%  
     """)
 
-    # Plot
     fig, axes = plt.subplots(3,1,figsize=(10,12),sharex=True)
     axes[0].plot(df["Close"], label="Close")
     axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}")
@@ -187,20 +186,20 @@ batch = st.text_area("Enter tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, 
 
 if st.button("▶️ Run Batch Backtest"):
     perf = []
-    for t in [x.strip() for x in batch.split(",") if x.strip()]:
+    for t in [s.strip() for s in batch.split(",") if s.strip()]:
         df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
         if df_t.empty: continue
         df_t = build_composite(df_t)
         df_t, max_dd, sharpe, win_rt = backtest(df_t)
         perf.append({
-            "Ticker": t,
-            "Composite": df_t["Composite"].iloc[-1],
+            "Ticker":  t,
+            "Composite": int(df_t["Composite"].iloc[-1]),
             "Signal": {1:"BUY",0:"HOLD",-1:"SELL"}[int(df_t["Trade"].iloc[-1])],
             "BuyHold%": (df_t["CumBH"].iloc[-1]-1)*100,
             "Strat%":   (df_t["CumStrat"].iloc[-1]-1)*100,
-            "Sharpe": sharpe,
-            "MaxDD%": max_dd,
-            "Win%": win_rt
+            "Sharpe":   sharpe,
+            "MaxDD%":   max_dd,
+            "Win%":     win_rt
         })
 
     if not perf:
