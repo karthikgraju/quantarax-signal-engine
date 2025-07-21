@@ -3,75 +3,76 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Function to generate trading signals
-def get_signals(ticker):
-    df = yf.download(ticker, period='3mo')
-    
-    # Validate data
-    if df.empty or 'Close' not in df.columns:
-        return df, {"error": "❌ No valid 'Close' price data for this ticker."}
+st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 
-    # Calculate 10-day moving average
-    df['MA'] = df['Close'].rolling(window=10).mean()
+# Title
+st.markdown("🚀 **QuantaraX — Smart Signal Engine**")
+st.markdown("🔍 **Generate Today's Signals**")
 
-    # Drop rows with missing values
-    if 'MA' not in df.columns:
-        return df, {"error": "❌ Could not calculate moving average (MA)."}
+# Input
+ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
-    df_valid = df.dropna(subset=['Close', 'MA'])
-    if len(df_valid) < 2:
-        return df, {"error": "⚠️ Not enough valid data after cleaning."}
+# Button
+if st.button("📊 Generate Today's Signals"):
+    def get_signals(ticker):
+        df = yf.download(ticker, period="3mo")
 
-    # Extract relevant prices
-    close_today = df_valid['Close'].iloc[-1]
-    close_yesterday = df_valid['Close'].iloc[-2]
-    ma_today = df_valid['MA'].iloc[-1]
-    ma_yesterday = df_valid['MA'].iloc[-2]
+        if df.empty or 'Close' not in df.columns:
+            return df, {"error": "❌ No valid 'Close' price data."}
 
-    signals = {}
+        # Calculate 10-day moving average
+        df['MA'] = df['Close'].rolling(window=10).mean()
 
-    if close_yesterday < ma_yesterday and close_today > ma_today:
-        signals['ma_crossover'] = "📈 Bullish crossover"
-        signals['recommendation'] = "🟢 Suggestion: BUY"
-    elif close_yesterday > ma_yesterday and close_today < ma_today:
-        signals['ma_crossover'] = "📉 Bearish crossover"
-        signals['recommendation'] = "🔴 Suggestion: SELL"
-    else:
-        signals['ma_crossover'] = "⏸️ No crossover"
-        signals['recommendation'] = "🟡 Suggestion: HOLD"
+        # Ensure both columns are present
+        required_cols = ['Close', 'MA']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return df, {"error": f"❌ Missing required columns: {missing_cols}"}
 
-    return df_valid, signals
+        # Drop rows with NA values in these columns
+        df_valid = df.dropna(subset=required_cols)
 
+        if df_valid.empty or len(df_valid) < 2:
+            return df, {"error": "⚠️ Not enough valid data to calculate signal."}
 
-# Streamlit App Layout
-def main():
-    st.title("🚀 QuantaraX — Smart Signal Engine")
-    st.subheader("🔍 Generate Today's Signals")
+        # Extract the relevant data points
+        close_today = df_valid['Close'].iloc[-1]
+        close_yesterday = df_valid['Close'].iloc[-2]
+        ma_today = df_valid['MA'].iloc[-1]
+        ma_yesterday = df_valid['MA'].iloc[-2]
 
-    ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", value="AAPL")
+        # Signal Logic
+        signals = {}
 
-    if st.button("📊 Generate Today's Signals"):
-        with st.spinner("Analyzing market data..."):
-            df, signals = get_signals(ticker.upper())
-
-        if 'error' in signals:
-            st.error(f"{ticker.upper()}: {signals['error']}")
+        if close_yesterday < ma_yesterday and close_today > ma_today:
+            signals['ma_crossover'] = "📈 Bullish crossover"
+            signals['recommendation'] = "🟢 Suggestion: BUY"
+        elif close_yesterday > ma_yesterday and close_today < ma_today:
+            signals['ma_crossover'] = "📉 Bearish crossover"
+            signals['recommendation'] = "🔴 Suggestion: SELL"
         else:
-            st.success(f"{ticker.upper()}: Signal → {signals['ma_crossover']}")
-            st.info(signals['recommendation'])
+            signals['ma_crossover'] = "⏸️ No crossover"
+            signals['recommendation'] = "🟡 Suggestion: HOLD"
 
-            # Plotting
-            st.write("### Price & Moving Average")
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(df.index, df['Close'], label=ticker.upper(), color='blue')
-            ax.plot(df.index, df['MA'], label='10-day MA', linestyle='--', color='orange')
-            ax.set_xlabel("Date")
-            ax.set_ylabel("Price")
-            ax.set_title("Price & Moving Average")
-            ax.legend()
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
+        return df_valid, signals
 
+    # Call logic
+    df, signal = get_signals(ticker.upper())
 
-if __name__ == "__main__":
-    main()
+    # Handle errors
+    if "error" in signal:
+        st.error(f"{ticker.upper()}: {signal['error']}")
+    else:
+        st.success(f"{ticker.upper()}: Signal → {signal['ma_crossover']}")
+        st.info(signal['recommendation'])
+
+        # Plot
+        fig, ax = plt.subplots()
+        ax.plot(df.index, df['Close'], label=f"{ticker.upper()}", color='blue')
+        ax.plot(df.index, df['MA'], label="10-day MA", color='orange', linestyle='--')
+        ax.set_title("Price & Moving Average")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
+        ax.legend()
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
