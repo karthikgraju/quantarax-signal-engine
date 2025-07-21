@@ -1,59 +1,65 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objs as go
+import matplotlib.pyplot as plt
+import numpy as np
 
-st.set_page_config(page_title="QuantaraX — Signal Engine", page_icon="🚀")
+st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="centered")
 
 st.title("🚀 QuantaraX — Smart Signal Engine")
 st.subheader("🔍 Generate Today's Signals")
 
+# Ticker input
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
-def get_signals(ticker):
+def get_data(ticker):
     try:
-        df = yf.download(ticker, period="1mo")
-
+        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
         if df.empty or len(df) < 12:
-            return df, "⚠️ Not enough data to compute signals."
-
+            raise ValueError("Not enough data")
         df["MA_10"] = df["Close"].rolling(window=10).mean()
-        df.dropna(inplace=True)
+        return df
+    except Exception as e:
+        return None
 
-        if "MA_10" not in df.columns or df["MA_10"].isnull().all():
-            return df, "⚠️ MA_10 could not be calculated."
+def generate_signal(df):
+    try:
+        if len(df) < 11:
+            return "⚠️ Not enough data to compute signals."
 
-        # Make sure we have enough data points
-        if len(df) < 2:
-            return df, "⚠️ Not enough rows after calculating MA_10."
-
-        # Extract last two values safely
-        latest_close = df["Close"].iloc[-1]
+        last_close = df["Close"].iloc[-1]
         prev_close = df["Close"].iloc[-2]
-        latest_ma = df["MA_10"].iloc[-1]
+        last_ma = df["MA_10"].iloc[-1]
         prev_ma = df["MA_10"].iloc[-2]
 
-        if latest_close > latest_ma and prev_close < prev_ma:
-            signal = "✅ Bullish crossover"
-        elif latest_close < latest_ma and prev_close > prev_ma:
-            signal = "❌ Bearish crossover"
+        if prev_close < prev_ma and last_close > last_ma:
+            return "✅ Bullish crossover"
+        elif prev_close > prev_ma and last_close < last_ma:
+            return "❌ Bearish crossover"
         else:
-            signal = "No crossover"
-
-        return df, signal
-
+            return "➖ No clear signal"
     except Exception as e:
-        return pd.DataFrame(), f"❌ Error retrieving signals: {str(e)}"
+        return f"⚠️ Error computing signal: {e}"
+
+def plot_chart(df):
+    plt.figure(figsize=(10, 5))
+    plt.plot(df.index, df["Close"], label="Close", linewidth=2)
+    if "MA_10" in df.columns:
+        plt.plot(df.index, df["MA_10"], label="10-day MA", linestyle="--")
+    plt.title("Price & Moving Average")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    st.pyplot(plt)
 
 if st.button("📊 Generate Today's Signals"):
-    df, signal = get_signals(ticker.upper())
-
-    st.markdown(f"### {ticker.upper()}: {signal}")
-
-    if not df.empty and "MA_10" in df.columns and not df["MA_10"].isnull().all():
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=df["Close"], name='Close', line=dict(color='royalblue')))
-        fig.add_trace(go.Scatter(x=df.index, y=df["MA_10"], name='MA_10', line=dict(color='orange')))
-        st.plotly_chart(fig)
+    df = get_data(ticker)
+    if df is not None:
+        signal = generate_signal(df)
+        st.markdown(f"**{ticker.upper()}:** {signal}")
+        if len(df) >= 10:
+            plot_chart(df)
+        else:
+            st.warning("Chart cannot be displayed due to insufficient data.")
     else:
-        st.warning("Chart cannot be displayed due to insufficient data.")
+        st.error(f"{ticker.upper()}: ❌ Failed to retrieve data from yfinance or not enough data available.")
