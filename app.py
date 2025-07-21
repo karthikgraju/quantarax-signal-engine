@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-# ──────────────────────────── Reset Defaults Setup ────────────────────────────
+# ──────────────────────────── Default Values Setup ────────────────────────────
 DEFAULTS = {
     "ma_window":   10,
     "rsi_period":  14,
@@ -13,27 +13,33 @@ DEFAULTS = {
     "macd_signal":  9
 }
 
+# Initialize session_state with defaults on first load
+for key, val in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
+
+# Sidebar reset button
 st.sidebar.header("Controls")
 if st.sidebar.button("🔄 Reset to defaults"):
     for key, val in DEFAULTS.items():
         st.session_state[key] = val
 
-# ──────────────────────────── Sidebar Sliders ────────────────────────────────
+# Sidebar sliders bound to session_state
 st.sidebar.header("Indicator Parameters")
 ma_window   = st.sidebar.slider(
-    "MA window", 5, 50, DEFAULTS["ma_window"], key="ma_window"
+    "MA window", 5, 50, st.session_state["ma_window"], key="ma_window"
 )
 rsi_period  = st.sidebar.slider(
-    "RSI lookback", 5, 30, DEFAULTS["rsi_period"], key="rsi_period"
+    "RSI lookback", 5, 30, st.session_state["rsi_period"], key="rsi_period"
 )
 macd_fast   = st.sidebar.slider(
-    "MACD fast span", 5, 20, DEFAULTS["macd_fast"], key="macd_fast"
+    "MACD fast span", 5, 20, st.session_state["macd_fast"], key="macd_fast"
 )
 macd_slow   = st.sidebar.slider(
-    "MACD slow span", 20, 40, DEFAULTS["macd_slow"], key="macd_slow"
+    "MACD slow span", 20, 40, st.session_state["macd_slow"], key="macd_slow"
 )
 macd_signal = st.sidebar.slider(
-    "MACD signal span", 5, 20, DEFAULTS["macd_signal"], key="macd_signal"
+    "MACD signal span", 5, 20, st.session_state["macd_signal"], key="macd_signal"
 )
 
 # ──────────────────────────── Page Config & Title ─────────────────────────────
@@ -55,7 +61,7 @@ def load_and_compute(
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
 
-    # 1) MA
+    # 1) Moving Average
     df[f"MA{ma_window}"] = df["Close"].rolling(ma_window).mean()
 
     # 2) RSI
@@ -72,7 +78,7 @@ def load_and_compute(
     sig   = macd.ewm(span=macd_signal, adjust=False).mean()
     df["MACD"], df["MACD_Signal"] = macd, sig
 
-    # 4) Filter out any rows with NaN in our four key columns
+    # 4) Filter out rows with NaN in any key column
     cols = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
     mask = pd.Series(True, index=df.index)
     for c in cols:
@@ -118,7 +124,7 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     df["RSI_Signal"]  = rsi_sig
     df["MACD_Signal"] = macd_sig
     df["Composite"]   = comp
-    df["Trade"]       = np.sign(comp)  # +1 BUY,  0 HOLD,  -1 SELL
+    df["Trade"]       = np.sign(comp)
     return df
 
 # ───────────────────────────── Backtest & Metrics ───────────────────────────
@@ -139,7 +145,6 @@ def backtest(df: pd.DataFrame):
 
 # ─────────────────────────────── Main App ────────────────────────────────────
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
-
 if st.button("▶️ Run Composite Backtest"):
     df = load_and_compute(
         ticker,
@@ -160,7 +165,7 @@ if st.button("▶️ Run Composite Backtest"):
     rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
     st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
 
-    # Performance metrics
+    # Metrics
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
     st.markdown(f"""
@@ -178,9 +183,8 @@ if st.button("▶️ Run Composite Backtest"):
         f"{ticker}_composite_signals.csv"
     )
 
-    # Plots
+    # Plot panels
     fig, axes = plt.subplots(4,1, figsize=(10,14), sharex=True)
-
     axes[0].plot(df["Close"], label="Close")
     axes[0].plot(df[f"MA{ma_window}"], "--", label=f"MA{ma_window}")
     axes[0].set_title("Price & MA"); axes[0].legend()
