@@ -35,6 +35,8 @@ Below under **Engine** you can:
 - Backtest a single ticker  
 - Batch test many  
 - Grid‐search indicator parameters  
+
+Happy Stock Searching! -KG
 """)
 
 with tab_engine:
