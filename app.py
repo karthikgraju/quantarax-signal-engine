@@ -3,25 +3,26 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# ========== Signal Logic ==========
-
 def get_signals(ticker):
     df = yf.download(ticker, period='3mo')
 
+    # Check if we received valid data
     if df.empty or 'Close' not in df.columns:
-        return df, {"error": "No price data available for this ticker."}
+        return df, {"error": "No valid price data for this ticker."}
 
-    # Compute MA before dropping rows
+    # Compute moving average
     df['MA'] = df['Close'].rolling(window=10).mean()
 
+    # Now it's safe to drop rows where Close or MA is NaN
     if 'MA' not in df.columns:
-        return df, {"error": "MA calculation failed."}
+        return df, {"error": "MA not generated. Check Close data."}
 
     df_valid = df.dropna(subset=['Close', 'MA'])
 
     if len(df_valid) < 2:
-        return df, {"error": "Not enough clean data to compute signals."}
+        return df, {"error": "Not enough data to compute signals."}
 
+    # Get values
     close_today = df_valid['Close'].iloc[-1]
     close_yesterday = df_valid['Close'].iloc[-2]
     ma_today = df_valid['MA'].iloc[-1]
@@ -29,6 +30,7 @@ def get_signals(ticker):
 
     signals = {}
 
+    # Signal logic
     if close_yesterday < ma_yesterday and close_today > ma_today:
         signals['ma_crossover'] = "📈 Bullish crossover"
         signals['recommendation'] = "🟢 Suggestion: BUY"
@@ -41,7 +43,7 @@ def get_signals(ticker):
 
     return df, signals
 
-# ========== Streamlit UI ==========
+# ========== Streamlit App ==========
 
 st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 
@@ -51,7 +53,7 @@ st.markdown("🔍 **Generate Today's Signals**")
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", value="AAPL")
 
 if st.button("📊 Generate Today's Signals"):
-    with st.spinner(f"Fetching data and generating signal for {ticker.upper()}..."):
+    with st.spinner("Generating signal..."):
         df, signals = get_signals(ticker.upper())
 
     if "error" in signals:
@@ -60,8 +62,8 @@ if st.button("📊 Generate Today's Signals"):
         st.success(f"{ticker.upper()}: Signal → {signals['ma_crossover']}")
         st.info(signals['recommendation'])
 
-        # Plot chart
-        st.subheader("Price & Moving Average")
+        # Plotting
+        st.subheader("📉 Price & Moving Average")
         fig, ax = plt.subplots()
         ax.plot(df.index, df['Close'], label='Close Price', color='blue')
         ax.plot(df.index, df['MA'], label='10-day MA', color='orange', linestyle='--')
