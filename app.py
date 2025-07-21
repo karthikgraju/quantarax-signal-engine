@@ -25,21 +25,11 @@ if st.sidebar.button("🔄 Reset to defaults"):
         st.session_state[key] = val
 
 st.sidebar.header("Indicator Parameters")
-ma_window   = st.sidebar.slider(
-    "MA window", 5, 50, st.session_state["ma_window"], key="ma_window"
-)
-rsi_period  = st.sidebar.slider(
-    "RSI lookback", 5, 30, st.session_state["rsi_period"], key="rsi_period"
-)
-macd_fast   = st.sidebar.slider(
-    "MACD fast span", 5, 20, st.session_state["macd_fast"], key="macd_fast"
-)
-macd_slow   = st.sidebar.slider(
-    "MACD slow span", 20, 40, st.session_state["macd_slow"], key="macd_slow"
-)
-macd_signal = st.sidebar.slider(
-    "MACD signal span", 5, 20, st.session_state["macd_signal"], key="macd_signal"
-)
+ma_window   = st.sidebar.slider("MA window",       5, 50, st.session_state["ma_window"],   key="ma_window")
+rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="rsi_period")
+macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="macd_fast")
+macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state["macd_slow"],   key="macd_slow")
+macd_signal = st.sidebar.slider("MACD signal span",5, 20, st.session_state["macd_signal"], key="macd_signal")
 
 # ──────────────────────────── Page Config & Title ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
@@ -48,14 +38,7 @@ st.write("MA + RSI + MACD Composite Signals & Backtest")
 
 # ────────────────────────── Load & Compute Indicators ─────────────────────────
 @st.cache_data
-def load_and_compute(
-    ticker: str,
-    ma_window: int,
-    rsi_period: int,
-    macd_fast: int,
-    macd_slow: int,
-    macd_signal: int
-) -> pd.DataFrame:
+def load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal):
     df = yf.download(ticker, period="6mo", progress=False)
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
@@ -86,7 +69,7 @@ def load_and_compute(
     return df
 
 # ────────────────────────── Build Composite Signals ──────────────────────────
-def build_composite(df: pd.DataFrame) -> pd.DataFrame:
+def build_composite(df):
     n     = len(df)
     close = df["Close"].values
     ma    = df[f"MA{ma_window}"].values
@@ -126,7 +109,7 @@ def build_composite(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ───────────────────────────── Backtest & Metrics ────────────────────────────
-def backtest(df: pd.DataFrame):
+def backtest(df):
     df = df.copy()
     df["Return"]   = df["Close"].pct_change().fillna(0)
     df["Position"] = df["Trade"].shift(1).fillna(0).clip(lower=0)
@@ -145,16 +128,10 @@ def backtest(df: pd.DataFrame):
 st.markdown("### Single‐Ticker Backtest")
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
 if st.button("▶️ Run Composite Backtest"):
-    df = load_and_compute(
-        ticker,
-        ma_window,
-        rsi_period,
-        macd_fast,
-        macd_slow,
-        macd_signal
-    )
+    df = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
     if df.empty:
-        st.error(f"No data for '{ticker}'."); st.stop()
+        st.error(f"No data for '{ticker}'.")
+        st.stop()
 
     df = build_composite(df)
     df, max_dd, sharpe, win_rt, dd = backtest(df)
@@ -172,42 +149,53 @@ if st.button("▶️ Run Composite Backtest"):
     **Win Rate:** {win_rt:.1f}%  
     """)
 
-    st.pyplot(plt.figure(figsize=(8,4)))  # you can re-plot if you like…
+    # ─────────────── Plotting ───────────────
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+    # 1) Price & MA
+    axes[0].plot(df["Close"], label="Close", color="blue")
+    axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}", color="orange")
+    axes[0].set_title("Price & Moving Average")
+    axes[0].legend()
+
+    # 2) Composite Vote
+    axes[1].bar(df.index, df["Composite"], color="purple")
+    axes[1].set_title("Composite Vote (MA+RSI+MACD)")
+
+    # 3) Equity Curves
+    axes[2].plot(df["CumBH"],    ":", label="Buy & Hold")
+    axes[2].plot(df["CumStrat"], "-", label="Strategy")
+    axes[2].set_title("Equity Curves")
+    axes[2].legend()
+
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    st.pyplot(fig)
 
 # ───────────────────────────── Batch‐Ticker Mode ─────────────────────────────
 st.markdown("---")
 st.markdown("### Batch Backtest")
-batch_input = st.text_area(
-    "Enter tickers (comma-separated)", 
-    "AAPL, MSFT, TSLA, SPY, QQQ"
-).upper()
+batch_input = st.text_area("Enter tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
 
 if st.button("▶️ Run Batch Backtest"):
     tickers = [t.strip() for t in batch_input.split(",") if t.strip()]
     results = []
-
     rec_map = {1:"BUY", 0:"HOLD", -1:"SELL"}
 
     for t in tickers:
-        df_t = load_and_compute(
-            t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal
-        )
+        df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
         if df_t.empty:
             continue
 
         df_t = build_composite(df_t)
         df_t, max_dd, sharpe, win_rt, dd = backtest(df_t)
 
-        rec       = rec_map[int(df_t["Trade"].iloc[-1])]
-        bh_return = (df_t["CumBH"].iloc[-1] - 1) * 100
-        st_return = (df_t["CumStrat"].iloc[-1] - 1) * 100
-
         results.append({
             "Ticker":         t,
-            "Composite vote": df_t["Composite"].iloc[-1],
-            "Signal":         rec,
-            "BuyHold %":      bh_return,
-            "Strat %":        st_return,
+            "Composite vote": int(df_t["Composite"].iloc[-1]),
+            "Signal":         rec_map[int(df_t["Trade"].iloc[-1])],
+            "BuyHold %":      (df_t["CumBH"].iloc[-1] - 1)*100,
+            "Strat %":        (df_t["CumStrat"].iloc[-1] - 1)*100,
             "Sharpe":         sharpe,
             "Max Drawdown %": max_dd,
             "Win Rate %":     win_rt
@@ -218,8 +206,4 @@ if st.button("▶️ Run Batch Backtest"):
     else:
         perf_df = pd.DataFrame(results).set_index("Ticker")
         st.dataframe(perf_df)
-        st.download_button(
-            "Download performance CSV",
-            perf_df.to_csv(),
-            "batch_performance.csv"
-        )
+        st.download_button("Download performance CSV", perf_df.to_csv(), "batch_performance.csv")
