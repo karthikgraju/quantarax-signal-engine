@@ -1,69 +1,68 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
-import streamlit as st
+
+# ========== Signal Logic ==========
 
 def get_signals(ticker):
     df = yf.download(ticker, period='3mo')
+
+    if df.empty or 'Close' not in df.columns:
+        return df, {"error": "No price data available for this ticker."}
+
     df['MA'] = df['Close'].rolling(window=10).mean()
+    df_valid = df.dropna(subset=['Close', 'MA'])
 
-    # Ensure we have enough data
-    if df.shape[0] < 11:
-        return df, {"error": "Not enough data to compute 10-day MA."}
+    if len(df_valid) < 2:
+        return df, {"error": "Not enough clean data to compute signals."}
 
-    close_today = df['Close'].iloc[-1]
-    close_yesterday = df['Close'].iloc[-2]
-    ma_today = df['MA'].iloc[-1]
-    ma_yesterday = df['MA'].iloc[-2]
-
-    # NaN guard
-    if pd.isna(close_today) or pd.isna(close_yesterday) or pd.isna(ma_today) or pd.isna(ma_yesterday):
-        return df, {"error": "Insufficient data to compute signals."}
+    close_today = df_valid['Close'].iloc[-1]
+    close_yesterday = df_valid['Close'].iloc[-2]
+    ma_today = df_valid['MA'].iloc[-1]
+    ma_yesterday = df_valid['MA'].iloc[-2]
 
     signals = {}
+
+    # Signal generation logic
     if close_yesterday < ma_yesterday and close_today > ma_today:
         signals['ma_crossover'] = "📈 Bullish crossover"
-        signals['suggestion'] = "✅ Buy"
+        signals['recommendation'] = "🟢 Suggestion: BUY"
     elif close_yesterday > ma_yesterday and close_today < ma_today:
         signals['ma_crossover'] = "📉 Bearish crossover"
-        signals['suggestion'] = "🚫 Sell"
+        signals['recommendation'] = "🔴 Suggestion: SELL"
     else:
         signals['ma_crossover'] = "⏸️ No crossover"
-        signals['suggestion'] = "🔍 Hold"
+        signals['recommendation'] = "🟡 Suggestion: HOLD"
 
     return df, signals
 
-def plot_chart(df, ticker):
-    plt.figure(figsize=(10, 5))
-    plt.plot(df['Close'], label=ticker.upper(), color='blue')
-    plt.plot(df['MA'], label='10-day MA', linestyle='--', color='orange')
-    plt.title('Price & Moving Average')
-    plt.xlabel('Date')
-    plt.ylabel('Price')
-    plt.legend()
-    st.pyplot(plt)
+# ========== Streamlit UI ==========
 
-def main():
-    st.title("🚀 QuantaraX — Smart Signal Engine")
-    st.subheader("🔍 Generate Today's Signals")
+st.set_page_config(page_title="QuantaraX Signal Engine", layout="centered")
 
-    ticker = st.text_input("Enter a stock ticker (e.g., AAPL)")
-    if st.button("📈 Generate Today's Signals"):
-        if not ticker:
-            st.warning("Please enter a valid ticker symbol.")
-            return
+st.markdown("🚀 **QuantaraX — Smart Signal Engine**")
+st.markdown("🔍 **Generate Today's Signals**")
 
+ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", value="AAPL")
+
+if st.button("📊 Generate Today's Signals"):
+    with st.spinner(f"Fetching data and generating signal for {ticker.upper()}..."):
         df, signals = get_signals(ticker.upper())
 
-        if "error" in signals:
-            st.error(f"{ticker.upper()}: ⚠️ {signals['error']}")
-            st.warning("Chart cannot be displayed due to data error.")
-            return
+    if "error" in signals:
+        st.error(f"{ticker.upper()}: ⚠️ {signals['error']}")
+    else:
+        st.success(f"{ticker.upper()}: Signal → {signals['ma_crossover']}")
+        st.info(signals['recommendation'])
 
-        st.success(f"{ticker.upper()}: Signal ➔ {signals['ma_crossover']}")
-        st.info(f"Suggested Action: {signals['suggestion']}")
-
-        plot_chart(df, ticker)
-
-if __name__ == "__main__":
-    main()
+        # Plot chart
+        st.subheader("Price & Moving Average")
+        fig, ax = plt.subplots()
+        ax.plot(df.index, df['Close'], label='Close Price', color='blue')
+        ax.plot(df.index, df['MA'], label='10-day MA', color='orange', linestyle='--')
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
+        ax.legend()
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
