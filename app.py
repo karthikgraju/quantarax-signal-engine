@@ -19,7 +19,14 @@ macd_signal = st.sidebar.slider("MACD signal span", 5, 20,  9)
 
 # ─ Load & compute indicators ───────────────────────────────────────────────
 @st.cache_data
-def load_and_compute(ticker: str) -> pd.DataFrame:
+def load_and_compute(
+    ticker: str,
+    ma_window: int,
+    rsi_period: int,
+    macd_fast: int,
+    macd_slow: int,
+    macd_signal: int
+) -> pd.DataFrame:
     df = yf.download(ticker, period="6mo", progress=False)
     if df.empty or "Close" not in df.columns:
         return pd.DataFrame()
@@ -28,7 +35,7 @@ def load_and_compute(ticker: str) -> pd.DataFrame:
     df[f"MA{ma_window}"] = df["Close"].rolling(ma_window).mean()
 
     # 2) RSI
-    delta = df["Close"].diff()
+    delta    = df["Close"].diff()
     up, down = delta.clip(lower=0), -delta.clip(upper=0)
     ema_up   = up.ewm(com=rsi_period-1, adjust=False).mean()
     ema_down = down.ewm(com=rsi_period-1, adjust=False).mean()
@@ -41,12 +48,11 @@ def load_and_compute(ticker: str) -> pd.DataFrame:
     sig   = macd.ewm(span=macd_signal, adjust=False).mean()
     df["MACD"], df["MACD_Signal"] = macd, sig
 
-    # 4) Filter out any rows with NaN in _any_ of our indicator columns
+    # 4) Filter out rows with any NaN in our key columns
     cols = [f"MA{ma_window}", f"RSI{rsi_period}", "MACD", "MACD_Signal"]
-    # build mask
     mask = pd.Series(True, index=df.index)
     for c in cols:
-        if c in df:
+        if c in df.columns:
             mask &= df[c].notna()
     df = df.loc[mask].reset_index(drop=True)
     return df
@@ -113,13 +119,21 @@ def backtest(df: pd.DataFrame):
 # ─ Main App ───────────────────────────────────────────────────────────────
 ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
 if st.button("▶️ Run Composite Backtest"):
-    df = load_and_compute(ticker)
+    # pass all sliders into the cache key so columns always line up
+    df = load_and_compute(
+        ticker,
+        ma_window,
+        rsi_period,
+        macd_fast,
+        macd_slow,
+        macd_signal
+    )
     if df.empty:
         st.error(f"No data for '{ticker}'.")
         st.stop()
 
     df = build_composite(df)
-    df, max_dd, sharpe, win_rt, dd = backtest(df)
+    df, max_dd, sharpe, win_rate, dd = backtest(df)
 
     # Live recommendation
     rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
@@ -133,7 +147,7 @@ if st.button("▶️ Run Composite Backtest"):
     **Strategy:** {strat_ret:.2f}%  
     **Sharpe:** {sharpe:.2f}  
     **Max Drawdown:** {max_dd:.2f}%  
-    **Win Rate:** {win_rt:.1f}%  
+    **Win Rate:** {win_rate:.1f}%  
     """)
 
     # Download CSV
