@@ -17,9 +17,9 @@ def analyze_ticker(ticker):
         return {"ticker": ticker, "insight": "⚠️ Not enough data"}
     df["MA_10"] = df["Close"].rolling(10).mean()
     try:
-        # Get last closing price and last MA_10 value
-        last_close = df["Close"].iloc[-1]
-        last_ma = df["MA_10"].iloc[-1]
+        last_close = float(df["Close"].iloc[-1])
+        last_ma = float(df["MA_10"].iloc[-1])
+
         if pd.isna(last_ma):
             signal = "⚠️ MA data not ready"
         elif last_close > last_ma:
