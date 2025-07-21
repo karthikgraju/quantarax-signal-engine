@@ -37,14 +37,20 @@ st.write("MA + RSI + MACD Composite Signals & Backtest")
 # ───────────────────────────── Load & Compute Indicators ─────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
+    # 1) Download
     df = yf.download(ticker, period="6mo", progress=False)
     if df.empty or "Close" not in df:
         return pd.DataFrame()
 
-    # GENERIC MOVING AVERAGE
+    # 2) Enforce minimum history for our indicators
+    min_rows = max(ma_w, rsi_p, ms + sig)
+    if len(df) < min_rows:
+        return pd.DataFrame()
+
+    # 3) Moving Average (generic column = "MA")
     df["MA"] = df["Close"].rolling(window=ma_w).mean()
 
-    # GENERIC RSI
+    # 4) RSI
     delta    = df["Close"].diff()
     up       = delta.clip(lower=0)
     down     = -delta.clip(upper=0)
@@ -52,26 +58,26 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     ema_down = down.ewm(com=rsi_p-1, adjust=False).mean()
     df["RSI"] = 100 - 100/(1 + ema_up/ema_down)
 
-    # GENERIC MACD
+    # 5) MACD & Signal
     ema_f = df["Close"].ewm(span=mf, adjust=False).mean()
     ema_s = df["Close"].ewm(span=ms, adjust=False).mean()
     macd  = ema_f - ema_s
     df["MACD"]        = macd
     df["MACD_Signal"] = macd.ewm(span=sig, adjust=False).mean()
 
-    # DROP ANY ROWS MISSING ANY OF OUR FOUR INDICATORS
-    required = ["MA","RSI","MACD","MACD_Signal"]
-    df = df.dropna(subset=required).reset_index(drop=True)
+    # 6) Drop any rows where ANY of our four indicators is NaN
+    req = ["MA","RSI","MACD","MACD_Signal"]
+    df = df.dropna(subset=req).reset_index(drop=True)
     return df
 
 # ───────────────────────────── Build Composite Signals ─────────────────────────────
 def build_composite(df):
-    n         = len(df)
-    closes    = df["Close"].to_numpy()
-    mas       = df["MA"].to_numpy()
-    rsis      = df["RSI"].to_numpy()
-    macds     = df["MACD"].to_numpy()
-    sigs      = df["MACD_Signal"].to_numpy()
+    n      = len(df)
+    closes = df["Close"].to_numpy()
+    mas    = df["MA"].to_numpy()
+    rsis   = df["RSI"].to_numpy()
+    macds  = df["MACD"].to_numpy()
+    sigs   = df["MACD_Signal"].to_numpy()
 
     ma_sig    = np.zeros(n, dtype=int)
     rsi_sig   = np.zeros(n, dtype=int)
@@ -79,7 +85,7 @@ def build_composite(df):
     comp      = np.zeros(n, dtype=int)
     trade     = np.zeros(n, dtype=int)
 
-    for i in range(1,n):
+    for i in range(1, n):
         # MA crossover
         if closes[i-1] < mas[i-1] and closes[i] > mas[i]:
             ma_sig[i] =  1
@@ -98,7 +104,7 @@ def build_composite(df):
         elif macds[i-1] > sigs[i-1] and macds[i] < sigs[i]:
             macd_sig2[i] = -1
 
-        # Composite vote and resulting trade
+        # Composite & trade
         comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
         trade[i] = np.sign(comp[i])
 
@@ -133,7 +139,8 @@ ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
 if st.button("▶️ Run Composite Backtest"):
     df = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
     if df.empty:
-        st.error(f"No data for '{ticker}'."); st.stop()
+        st.error(f"No enough data to compute all indicators for '{ticker}'.")
+        st.stop()
 
     df = build_composite(df)
     df, max_dd, sharpe, win_rt = backtest(df)
@@ -151,7 +158,7 @@ if st.button("▶️ Run Composite Backtest"):
 - **Win Rate:**      {win_rt:.1f}%  
     """)
 
-    # Plot 3‐panel chart
+    # 3‐panel plot
     fig, axes = plt.subplots(3,1,figsize=(10,12),sharex=True)
     axes[0].plot(df["Close"], label="Close")
     axes[0].plot(df["MA"],    label=f"MA{ma_window}")
@@ -176,7 +183,8 @@ if st.button("▶️ Run Batch Backtest"):
     perf = []
     for t in [s.strip() for s in batch.split(",") if s.strip()]:
         df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-        if df_t.empty: continue
+        if df_t.empty:
+            continue
         df_t = build_composite(df_t)
         df_t, max_dd, sharpe, win_rt = backtest(df_t)
         perf.append({
@@ -189,6 +197,7 @@ if st.button("▶️ Run Batch Backtest"):
             "Max DD %":   max_dd,
             "Win %":      win_rt
         })
+
     if not perf:
         st.error("No valid tickers/data.")
     else:
@@ -218,7 +227,8 @@ if st.button("🏃‍♂️ Run Grid Search"):
                     for ms in ms_list:
                         for sg in sig_list:
                             df_i = load_and_compute(ticker, mw, rp, mf, ms, sg)
-                            if df_i.empty: continue
+                            if df_i.empty:
+                                continue
                             df_i = build_composite(df_i)
                             df_i, max_dd, sharpe_i, win_rt_i = backtest(df_i)
                             strat_ret = (df_i["CumStrat"].iloc[-1]-1)*100
