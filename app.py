@@ -74,11 +74,16 @@ def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
     return df
 
 # ───────────────────────────── Build Composite Signals ─────────────────────────────
-def build_composite(df):
+def build_composite(df, ma_w, rsi_p):
+    """
+    Requires df to already contain:
+      - 'Close'
+      - f'MA{ma_w}', f'RSI{rsi_p}', 'MACD', 'MACD_Signal'
+    """
     n         = len(df)
     close_arr = df["Close"].to_numpy()
-    ma_arr    = df[f"MA{ma_window}"].to_numpy()
-    rsi_arr   = df[f"RSI{rsi_period}"].to_numpy()
+    ma_arr    = df[f"MA{ma_w}"].to_numpy()
+    rsi_arr   = df[f"RSI{rsi_p}"].to_numpy()
     macd_arr  = df["MACD"].to_numpy()
     sig_arr   = df["MACD_Signal"].to_numpy()
 
@@ -104,6 +109,7 @@ def build_composite(df):
             macd_sig2[i] =  1
         elif macd_arr[i-1] > sig_arr[i-1] and macd_arr[i] < sig_arr[i]:
             macd_sig2[i] = -1
+
         # Composite & trade
         comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
         trade[i] = np.sign(comp[i])
@@ -141,11 +147,13 @@ if st.button("▶️ Run Composite Backtest"):
     if df.empty:
         st.error(f"No data for '{ticker}'."); st.stop()
 
-    df = build_composite(df)
+    # pass the exact windows into build_composite
+    df = build_composite(df, ma_window, rsi_period)
     df, max_dd, sharpe, win_rt = backtest(df)
 
-    rec_map = {1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL"}
-    st.success(f"**{ticker}**: {rec_map[int(df['Trade'].iloc[-1])]}")
+    rec_map = { 1:"🟢 BUY", 0:"🟡 HOLD", -1:"🔴 SELL" }
+    last_trade = int(df["Trade"].iloc[-1])
+    st.success(f"**{ticker}**: {rec_map[last_trade]}")
 
     bh_ret    = (df["CumBH"].iloc[-1] - 1) * 100
     strat_ret = (df["CumStrat"].iloc[-1] - 1) * 100
@@ -157,7 +165,7 @@ if st.button("▶️ Run Composite Backtest"):
 - **Win Rate:**      {win_rt:.1f}%  
     """)
 
-    # Plot 3-panel chart
+    # Plot 3‐panel chart
     fig, axes = plt.subplots(3,1,figsize=(10,12),sharex=True)
     axes[0].plot(df["Close"], label="Close")
     axes[0].plot(df[f"MA{ma_window}"], label=f"MA{ma_window}")
@@ -183,7 +191,8 @@ if st.button("▶️ Run Batch Backtest"):
     for t in [s.strip() for s in batch.split(",") if s.strip()]:
         df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
         if df_t.empty: continue
-        df_t = build_composite(df_t)
+
+        df_t = build_composite(df_t, ma_window, rsi_period)
         df_t, max_dd, sharpe, win_rt = backtest(df_t)
         perf.append({
             "Ticker":     t,
@@ -192,9 +201,10 @@ if st.button("▶️ Run Batch Backtest"):
             "BuyHold %":  (df_t["CumBH"].iloc[-1]-1)*100,
             "Strategy %": (df_t["CumStrat"].iloc[-1]-1)*100,
             "Sharpe":     sharpe,
-            "Max Drawdown %": max_dd,
+            "MaxDD %":    max_dd,
             "Win Rate %": win_rt
         })
+
     if not perf:
         st.error("No valid tickers/data.")
     else:
@@ -205,11 +215,11 @@ if st.button("▶️ Run Batch Backtest"):
 # ───────────────────────────── Hyperparameter Optimization ─────────────────────────────
 st.markdown("---")
 st.markdown("## 🛠️ Hyperparameter Optimization")
-ma_list   = st.multiselect("MA windows to test",     [5,10,15,20,30], default=[ma_window], key="grid_ma")
-rsi_list  = st.multiselect("RSI lookbacks to test",  [7,14,21,28], default=[rsi_period], key="grid_rsi")
-mf_list   = st.multiselect("MACD fast spans to test",[8,12,16,20], default=[macd_fast], key="grid_mf")
-ms_list   = st.multiselect("MACD slow spans to test",[20,26,32,40], default=[macd_slow], key="grid_ms")
-sig_list  = st.multiselect("MACD sig spans to test", [5,9,12,16], default=[macd_signal], key="grid_sig")
+ma_list   = st.multiselect("MA windows to test",     [5,10,15,20,30], default=[ma_window],   key="grid_ma")
+rsi_list  = st.multiselect("RSI lookbacks to test",  [7,14,21,28],   default=[rsi_period], key="grid_rsi")
+mf_list   = st.multiselect("MACD fast spans to test",[8,12,16,20],  default=[macd_fast],   key="grid_mf")
+ms_list   = st.multiselect("MACD slow spans to test",[20,26,32,40],default=[macd_slow],   key="grid_ms")
+sig_list  = st.multiselect("MACD sig spans to test", [5,9,12,16],   default=[macd_signal], key="grid_sig")
 
 if st.button("🏃‍♂️ Run Grid Search"):
     if not ticker:
@@ -227,10 +237,13 @@ if st.button("🏃‍♂️ Run Grid Search"):
                     for ms in ms_list:
                         for s in sig_list:
                             df_i = load_and_compute(ticker, ma_w, rsi_p, mf, ms, s)
-                            if df_i.empty: continue
-                            df_i = build_composite(df_i)
+                            if df_i.empty:
+                                continue
+
+                            df_i = build_composite(df_i, ma_w, rsi_p)
                             df_i, max_dd, sharpe_i, win_rt_i = backtest(df_i)
                             strat_ret = (df_i["CumStrat"].iloc[-1] - 1) * 100
+
                             results.append({
                                 "MA": ma_w, "RSI": rsi_p,
                                 "MACD_Fast": mf, "MACD_Slow": ms, "MACD_Sig": s,
