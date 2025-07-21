@@ -1,65 +1,51 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
 
 st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="centered")
 
-st.title("🚀 QuantaraX — Smart Signal Engine")
-st.subheader("🔍 Generate Today's Signals")
+st.markdown("🚀 **QuantaraX — Smart Signal Engine**")
+st.markdown("🔍 **Generate Today's Signals**")
 
-# Ticker input
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL")
 
-def get_data(ticker):
-    try:
-        df = yf.download(ticker, period="3mo", interval="1d", progress=False)
-        if df.empty or len(df) < 12:
-            raise ValueError("Not enough data")
-        df["MA_10"] = df["Close"].rolling(window=10).mean()
-        return df
-    except Exception as e:
-        return None
+def get_signals(ticker):
+    df = yf.download(ticker, period="3mo")
+    if df.empty or len(df) < 11:
+        raise ValueError("Not enough data to compute signals.")
 
-def generate_signal(df):
-    try:
-        if len(df) < 11:
-            return "⚠️ Not enough data to compute signals."
+    df["MA_10"] = df["Close"].rolling(window=10).mean()
 
-        last_close = df["Close"].iloc[-1]
-        prev_close = df["Close"].iloc[-2]
-        last_ma = df["MA_10"].iloc[-1]
-        prev_ma = df["MA_10"].iloc[-2]
+    close_today = df["Close"].iloc[-1]
+    close_yesterday = df["Close"].iloc[-2]
+    ma_today = df["MA_10"].iloc[-1]
+    ma_yesterday = df["MA_10"].iloc[-2]
 
-        if prev_close < prev_ma and last_close > last_ma:
-            return "✅ Bullish crossover"
-        elif prev_close > prev_ma and last_close < last_ma:
-            return "❌ Bearish crossover"
-        else:
-            return "➖ No clear signal"
-    except Exception as e:
-        return f"⚠️ Error computing signal: {e}"
+    if close_yesterday < ma_yesterday and close_today > ma_today:
+        signal = "✅ Bullish crossover"
+    elif close_yesterday > ma_yesterday and close_today < ma_today:
+        signal = "❌ Bearish crossover"
+    else:
+        signal = "➖ No crossover"
+
+    return df, signal
 
 def plot_chart(df):
-    plt.figure(figsize=(10, 5))
-    plt.plot(df.index, df["Close"], label="Close", linewidth=2)
-    if "MA_10" in df.columns:
-        plt.plot(df.index, df["MA_10"], label="10-day MA", linestyle="--")
-    plt.title("Price & Moving Average")
-    plt.xlabel("Date")
-    plt.ylabel("Price")
-    plt.legend()
-    st.pyplot(plt)
+    fig, ax = plt.subplots()
+    ax.plot(df.index, df["Close"], label="Close", color='blue')
+    ax.plot(df.index, df["MA_10"], label="10-day MA", linestyle='--', color='orange')
+    ax.set_title("Price & Moving Average")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price")
+    ax.legend()
+    st.pyplot(fig)
 
 if st.button("📊 Generate Today's Signals"):
-    df = get_data(ticker)
-    if df is not None:
-        signal = generate_signal(df)
+    try:
+        df, signal = get_signals(ticker)
         st.markdown(f"**{ticker.upper()}:** {signal}")
-        if len(df) >= 10:
-            plot_chart(df)
-        else:
-            st.warning("Chart cannot be displayed due to insufficient data.")
-    else:
-        st.error(f"{ticker.upper()}: ❌ Failed to retrieve data from yfinance or not enough data available.")
+        plot_chart(df)
+    except Exception as e:
+        st.error(f"{ticker.upper()}: ⚠️ Error retrieving signals: {e}")
+        st.warning("Chart cannot be displayed due to insufficient data.")
