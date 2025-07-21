@@ -8,7 +8,7 @@ st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="cente
 st.title("🚀 QuantaraX — Smart Signal Engine")
 st.subheader("🔍 Generate Today's Signals & Backtest")
 
-# — Indicator computation
+# ─ Indicator computation ─────────────────────────────────────────────────────
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["MA10"] = df["Close"].rolling(10).mean()
 
@@ -25,27 +25,40 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["MACD_Hist"]   = df["MACD"] - df["MACD_Signal"]
     return df
 
-# — Signal generation (vectorized)
+# ─ Signal generation using NumPy arrays ─────────────────────────────────────
 def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
-    # MA crossover: 1 if yesterday Close<MA & today Close>MA, -1 if reverse
-    ma_up = (df["Close"].shift(1) < df["MA10"].shift(1)) & (df["Close"] > df["MA10"])
-    ma_dn = (df["Close"].shift(1) > df["MA10"].shift(1)) & (df["Close"] < df["MA10"])
+    # convert to numpy for foolproof elementwise ops
+    close     = df["Close"].to_numpy()
+    ma10      = df["MA10"].to_numpy()
+    rsi14     = df["RSI14"].to_numpy()
+    macd      = df["MACD"].to_numpy()
+    macd_sig  = df["MACD_Signal"].to_numpy()
+
+    # build "previous" arrays by shifting in NumPy
+    prev_close    = np.concatenate([[np.nan], close[:-1]])
+    prev_ma10     = np.concatenate([[np.nan], ma10[:-1]])
+    prev_macd     = np.concatenate([[np.nan], macd[:-1]])
+    prev_macd_sig = np.concatenate([[np.nan], macd_sig[:-1]])
+
+    # MA crossover
+    ma_up = (prev_close < prev_ma10) & (close > ma10)
+    ma_dn = (prev_close > prev_ma10) & (close < ma10)
     df["ma_signal"] = np.where(ma_up, 1, np.where(ma_dn, -1, 0))
 
-    # RSI: oversold/overbought
-    df["rsi_signal"] = np.where(df["RSI14"] < 30, 1,
-                          np.where(df["RSI14"] > 70, -1, 0))
+    # RSI oversold/overbought
+    df["rsi_signal"] = np.where(rsi14 < 30, 1, np.where(rsi14 > 70, -1, 0))
 
     # MACD crossover
-    macd_up = (df["MACD"].shift(1) < df["MACD_Signal"].shift(1)) & (df["MACD"] > df["MACD_Signal"])
-    macd_dn = (df["MACD"].shift(1) > df["MACD_Signal"].shift(1)) & (df["MACD"] < df["MACD_Signal"])
+    macd_up = (prev_macd < prev_macd_sig) & (macd > macd_sig)
+    macd_dn = (prev_macd > prev_macd_sig) & (macd < macd_sig)
     df["macd_signal"] = np.where(macd_up, 1, np.where(macd_dn, -1, 0))
 
-    # Composite: long if sum>0
+    # Composite (go long if sum > 0)
     df["composite"] = ((df["ma_signal"] + df["rsi_signal"] + df["macd_signal"]) > 0).astype(int)
+
     return df
 
-# — Backtest
+# ─ Backtest returns ─────────────────────────────────────────────────────────────
 def backtest(df: pd.DataFrame) -> pd.DataFrame:
     df["return"]       = df["Close"].pct_change().fillna(0)
     df["strat_return"] = df["composite"].shift(1).fillna(0) * df["return"]
@@ -53,33 +66,31 @@ def backtest(df: pd.DataFrame) -> pd.DataFrame:
     df["cum_strat"]    = (1 + df["strat_return"]).cumprod()
     return df
 
-# — UI
+# ─ Streamlit UI ───────────────────────────────────────────────────────────────
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL").upper()
 
 if st.button("📊 Generate Today's Signals & Backtest"):
     df = yf.download(ticker, period="6mo", progress=False)
-    if df.empty or "Close" not in df:
+
+    if df.empty or "Close" not in df.columns:
         st.error("❌ No valid price data.")
     else:
-        # Compute everything
+        # compute and drop initial NaNs
         df = compute_indicators(df)
-
-        # Filter out rows with any NaN in our required columns
-        mask = (
+        df = df.loc[
             df["MA10"].notna() &
             df["RSI14"].notna() &
             df["MACD"].notna() &
             df["MACD_Signal"].notna()
-        )
-        df = df.loc[mask]
-        
+        ]
+
         if len(df) < 2:
-            st.error("⚠️ Not enough data after filtering indicators.")
+            st.error("⚠️ Not enough data after indicator filter.")
         else:
             df = generate_signals(df)
             df = backtest(df)
 
-            # Today's signals
+            # Display today's signals
             last = df.iloc[-1]
             ma_lbl   = {1:"📈", 0:"⏸️", -1:"📉"}[int(last["ma_signal"])]
             rsi_lbl  = f"{last['RSI14']:.1f}"
@@ -89,22 +100,20 @@ if st.button("📊 Generate Today's Signals & Backtest"):
             st.success(f"{ticker}: MA→{ma_lbl}   RSI→{rsi_lbl}   MACD→{macd_lbl}")
             st.info(f"Recommendation: {rec}")
 
-            # Backtest results
+            # Backtest performance
             bh_ret    = 100*(df["cum_bh"].iloc[-1] - 1)
             strat_ret = 100*(df["cum_strat"].iloc[-1] - 1)
-            st.markdown(f"**Buy & Hold Return:** {bh_ret:.2f}%  |  **Strategy Return:** {strat_ret:.2f}%")
+            st.markdown(f"**Buy & Hold:** {bh_ret:.2f}%   |   **Strategy:** {strat_ret:.2f}%")
 
-            # Plot
-            fig, axes = plt.subplots(4,1,figsize=(10,12), sharex=True)
-            ax1, ax2, ax3, ax4 = axes
-
+            # Plot all
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4,1, figsize=(10,12), sharex=True)
             ax1.plot(df.index, df["Close"], label="Close", color="blue")
             ax1.plot(df.index, df["MA10"], label="MA10", linestyle="--", color="orange")
             ax1.set_title("Price & 10-Day MA"); ax1.legend()
 
             ax2.plot(df.index, df["RSI14"], label="RSI14", color="purple")
             ax2.axhline(70, color="red", linestyle="--"); ax2.axhline(30, color="green", linestyle="--")
-            ax2.set_title("RSI(14)"); ax2.legend()
+            ax2.set_title("RSI"); ax2.legend()
 
             ax3.plot(df.index, df["MACD"], label="MACD", color="black")
             ax3.plot(df.index, df["MACD_Signal"], label="Signal", color="magenta", linestyle="--")
