@@ -3,12 +3,12 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# ─── Streamlit Setup ──────────────────────────────────────────────────────
+# ─ Streamlit Setup ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="QuantaraX — Smart Signal Engine", layout="centered")
 st.title("🚀 QuantaraX — Smart Signal Engine")
 st.subheader("🔍 Generate Today's Signals & Backtest")
 
-# ─── Indicator Computation ─────────────────────────────────────────────────
+# ─ Indicator Computation ──────────────────────────────────────────────────
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["MA10"] = df["Close"].rolling(10).mean()
 
@@ -27,34 +27,42 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-# ─── Signal Generation ─────────────────────────────────────────────────────
+# ─ Signal Generation ───────────────────────────────────────────────────────
 def generate_signals(df: pd.DataFrame) -> pd.DataFrame:
-    # initialize
+    # Ensure integer index to avoid any alignment issues
+    df = df.reset_index(drop=True)
+
+    # Prepare empty signal columns
     df["ma_signal"]   = 0
     df["rsi_signal"]  = 0
     df["macd_signal"] = 0
 
     # MA crossover
-    up  = (df["Close"].shift(1) < df["MA10"].shift(1)) & (df["Close"] > df["MA10"])
-    dn  = (df["Close"].shift(1) > df["MA10"].shift(1)) & (df["Close"] < df["MA10"])
-    df.loc[up, "ma_signal"] = 1
-    df.loc[dn, "ma_signal"] = -1
+    prev_close = df["Close"].shift(1)
+    prev_ma    = df["MA10"].shift(1)
+    mask_up = (prev_close < prev_ma) & (df["Close"] > df["MA10"])
+    mask_dn = (prev_close > prev_ma) & (df["Close"] < df["MA10"])
+    df.loc[mask_up, "ma_signal"] = 1
+    df.loc[mask_dn, "ma_signal"] = -1
 
     # RSI oversold/overbought
-    df.loc[df["RSI14"] < 30, "rsi_signal"] = 1
-    df.loc[df["RSI14"] > 70, "rsi_signal"] = -1
+    df.loc[df["RSI14"] < 30,  "rsi_signal"] = 1
+    df.loc[df["RSI14"] > 70,  "rsi_signal"] = -1
 
     # MACD crossover
-    mu  = (df["MACD"].shift(1) < df["MACD_Signal"].shift(1)) & (df["MACD"] > df["MACD_Signal"])
-    md  = (df["MACD"].shift(1) > df["MACD_Signal"].shift(1)) & (df["MACD"] < df["MACD_Signal"])
-    df.loc[mu, "macd_signal"] = 1
-    df.loc[md, "macd_signal"] = -1
+    prev_macd = df["MACD"].shift(1)
+    prev_sig  = df["MACD_Signal"].shift(1)
+    macd_up = (prev_macd < prev_sig) & (df["MACD"] > df["MACD_Signal"])
+    macd_dn = (prev_macd > prev_sig) & (df["MACD"] < df["MACD_Signal"])
+    df.loc[macd_up, "macd_signal"] = 1
+    df.loc[macd_dn, "macd_signal"] = -1
 
-    # Composite: long if any indicator is +1
+    # Composite: go long if sum of signals > 0
     df["composite"] = ((df["ma_signal"] + df["rsi_signal"] + df["macd_signal"]) > 0).astype(int)
+
     return df
 
-# ─── Backtest ───────────────────────────────────────────────────────────────
+# ─ Backtest ────────────────────────────────────────────────────────────────
 def backtest(df: pd.DataFrame) -> pd.DataFrame:
     df["return"]       = df["Close"].pct_change().fillna(0)
     df["strat_return"] = df["composite"].shift(1).fillna(0) * df["return"]
@@ -62,59 +70,58 @@ def backtest(df: pd.DataFrame) -> pd.DataFrame:
     df["cum_strat"]    = (1 + df["strat_return"]).cumprod()
     return df
 
-# ─── Main App ──────────────────────────────────────────────────────────────
+# ─ Main App ────────────────────────────────────────────────────────────────
 ticker = st.text_input("Enter a stock ticker (e.g., AAPL)", "AAPL").upper()
 
 if st.button("📊 Generate Today's Signals & Backtest"):
-    # 1) Fetch data
+    # Fetch data
     df = yf.download(ticker, period="6mo", progress=False)
-    if df.empty or "Close" not in df.columns:
+    if df.empty or "Close" not in df:
         st.error("❌ No valid price data for this ticker.")
     else:
-        # 2) Compute indicators
+        # Compute indicators
         df = compute_indicators(df)
 
-        # 3) Filter out any rows where we still have NaNs
-        clean = (
+        # Filter out any rows where indicators are NaN
+        valid = (
             df["MA10"].notna() &
             df["RSI14"].notna() &
             df["MACD"].notna() &
             df["MACD_Signal"].notna()
         )
-        df = df.loc[clean]
+        df = df.loc[valid]
 
         if len(df) < 2:
-            st.error("⚠️ Not enough data after cleaning indicators.")
+            st.error("⚠️ Not enough data after filtering indicators.")
         else:
-            # 4) Generate signals & backtest
+            # Generate signals & run backtest
             df = generate_signals(df)
             df = backtest(df)
 
-            # 5) Display latest signals
+            # Display latest signals
             last = df.iloc[-1]
-            ma_lbl   = {1:"📈", 0:"⏸️", -1:"📉"}[int(last["ma_signal"])]
+            ma_lbl   = {1: "📈", 0: "⏸️", -1: "📉"}[int(last["ma_signal"])]
             rsi_lbl  = f"{last['RSI14']:.1f}"
-            macd_lbl = {1:"📈", 0:"⏸️", -1:"📉"}[int(last["macd_signal"])]
+            macd_lbl = {1: "📈", 0: "⏸️", -1: "📉"}[int(last["macd_signal"])]
             reco     = "🟢 BUY" if last["composite"] == 1 else "🔴 SELL"
 
             st.success(f"{ticker}: MA→{ma_lbl}   RSI→{rsi_lbl}   MACD→{macd_lbl}")
             st.info(f"Recommendation: {reco}")
 
-            # 6) Backtest performance
+            # Backtest performance
             bh_ret    = 100 * (df["cum_bh"].iloc[-1] - 1)
             strat_ret = 100 * (df["cum_strat"].iloc[-1] - 1)
             st.markdown(f"**Buy & Hold Return:** {bh_ret:.2f}%   |   **Strategy Return:** {strat_ret:.2f}%")
 
-            # 7) Plot charts
-            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10,12), sharex=True)
+            # Plot panels
+            fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
 
             ax1.plot(df.index, df["Close"], label="Close", color="blue")
             ax1.plot(df.index, df["MA10"], label="MA10", linestyle="--", color="orange")
             ax1.set_title("Price & 10-Day MA"); ax1.legend()
 
             ax2.plot(df.index, df["RSI14"], label="RSI14", color="purple")
-            ax2.axhline(70, color="red", linestyle="--")
-            ax2.axhline(30, color="green", linestyle="--")
+            ax2.axhline(70, color="red", linestyle="--"); ax2.axhline(30, color="green", linestyle="--")
             ax2.set_title("RSI (14)"); ax2.legend()
 
             ax3.plot(df.index, df["MACD"], label="MACD", color="black")
