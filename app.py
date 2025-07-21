@@ -6,28 +6,28 @@ import matplotlib.pyplot as plt
 import openai
 import os
 
-# OpenRouter setup
+# Setup for OpenRouter
 openai.api_key = os.getenv("OPENROUTER_API_KEY")  # Set in Streamlit secrets
-openai.api_base = "https://openrouter.ai/api/v1"
+openai.base_url = "https://openrouter.ai/api/v1"
 
 st.title("QuantaraX — Smart Signal Engine")
 
-# -----------------------------------
-# Get stock data for the last 30 days
-# -----------------------------------
+# -------------------------
+# Fetch stock data
+# -------------------------
 def get_data(ticker):
     end = datetime.datetime.today()
     start = end - datetime.timedelta(days=30)
     df = yf.download(ticker, start=start, end=end)
     return df
 
-# -----------------------------------
-# Generate commentary using LLM
-# -----------------------------------
+# -------------------------
+# Use OpenRouter to explain signal
+# -------------------------
 def get_llm_commentary(ticker, signal):
     try:
-        response = openai.ChatCompletion.create(
-            "mistralai/mixtral-8x7b",  # or mistralai/mixtral-8x7b etc.
+        response = openai.chat.completions.create(
+            model="openai/gpt-3.5-turbo",  # you can change this to "mistralai/mixtral-8x7b" or others
             messages=[
                 {
                     "role": "system",
@@ -39,13 +39,13 @@ def get_llm_commentary(ticker, signal):
                 }
             ]
         )
-        return response['choices'][0]['message']['content']
+        return response.choices[0].message.content
     except Exception as e:
         return f"LLM Error: {str(e)}"
 
-# -----------------------------------
-# Analyze each ticker
-# -----------------------------------
+# -------------------------
+# Analyze ticker
+# -------------------------
 def analyze_ticker(ticker):
     df = get_data(ticker)
     if df.empty or len(df) < 10:
@@ -66,28 +66,28 @@ def analyze_ticker(ticker):
     except Exception as e:
         signal = f"❌ Error: {str(e)}"
 
-    # Generate chart
+    # Chart
     fig, ax = plt.subplots()
     df["Close"].plot(ax=ax, label="Close", color="blue")
     df["MA_10"].plot(ax=ax, label="MA 10", color="orange")
     ax.set_title(f"{ticker} Price & MA10")
     ax.legend()
 
-    # Generate AI commentary
+    # Commentary from LLM
     commentary = get_llm_commentary(ticker, signal)
 
     return {"ticker": ticker, "insight": signal, "chart": fig, "commentary": commentary}
 
-# -----------------------------------
-# Analyze all top tickers
-# -----------------------------------
+# -------------------------
+# Ticker list
+# -------------------------
 def get_top_signals():
     tickers = ["AAPL", "MSFT", "TSLA", "SPY", "QQQ"]
     return [analyze_ticker(t) for t in tickers]
 
-# -----------------------------------
-# UI Logic
-# -----------------------------------
+# -------------------------
+# Streamlit UI
+# -------------------------
 if st.button("Generate Today's Signals"):
     signals = get_top_signals()
     for sig in signals:
