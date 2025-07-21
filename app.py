@@ -4,10 +4,9 @@ import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
 import openai
-import os
 
-# Set OpenRouter credentials
-openai.api_key = st.secrets["OPENROUTER_API_KEY"]
+# For local testing, set the key directly — remove this in prod
+openai.api_key = "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"
 openai.api_base = "https://openrouter.ai/api/v1"
 
 st.title("QuantaraX — Smart Signal Engine")
@@ -21,10 +20,10 @@ def get_data(ticker):
 def get_llm_commentary(ticker, signal):
     try:
         response = openai.chat.completions.create(
-            model="openai/gpt-3.5-turbo",  # Must match OpenRouter-supported models
+            model="openai/gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a financial analyst summarizing signals for investors."},
-                {"role": "user", "content": f"Explain what this means for investors: {ticker} shows a signal of '{signal}'."}
+                {"role": "system", "content": "You are a financial analyst summarizing market signals."},
+                {"role": "user", "content": f"Explain what this means for investors: {ticker} has a signal of '{signal}'."}
             ]
         )
         return response.choices[0].message.content
@@ -39,8 +38,8 @@ def analyze_ticker(ticker):
     df["MA_10"] = df["Close"].rolling(10).mean()
 
     try:
-        last_close = df["Close"].iloc[-1]
-        last_ma = df["MA_10"].iloc[-1]
+        last_close = float(df["Close"].iloc[-1])
+        last_ma = float(df["MA_10"].iloc[-1])
 
         if pd.isna(last_ma):
             signal = "⚠️ MA data not ready"
@@ -51,14 +50,12 @@ def analyze_ticker(ticker):
     except Exception as e:
         signal = f"❌ Error: {str(e)}"
 
-    # Chart
     fig, ax = plt.subplots()
     df["Close"].plot(ax=ax, label="AAPL", color="blue")
     df["MA_10"].plot(ax=ax, label="MA 10", color="orange")
     ax.set_title(f"{ticker} Price & MA10")
     ax.legend()
 
-    # LLM Insight
     commentary = get_llm_commentary(ticker, signal)
 
     return {"ticker": ticker, "insight": signal, "chart": fig, "commentary": commentary}
