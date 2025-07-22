@@ -192,11 +192,12 @@ with tab_engine:
 
         macd_txt = {1:"MACD ↑ signal.",0:"No crossover.",-1:"MACD ↓ signal."}[macd_s]
 
-        with st.expander("🔎 Why This Signal?"):
-            st.write(f"- **MA:**  {ma_txt}")
-            st.write(f"- **RSI:** {rsi_txt}")
-            st.write(f"- **MACD:** {macd_txt}")
-            st.write(f"- **Composite Score:** {int(df_c['Composite'].iloc[-1])}")
+i = -1  # last row
+    with st.expander("🔎 Why This Signal?"):
+        st.write(f"- **MA:**   {texts['MA'][int(dfc['MA_Signal'].iloc[i])]}")
+        st.write(f"- **RSI:**  {texts['RSI'][int(dfc['RSI_Signal'].iloc[i])]}")
+        st.write(f"- **MACD:** {texts['MACD'][int(dfc['MACD_Signal2'].iloc[i])]}")
+        st.write(f"- **Composite Score:** {int(dfc['Composite'].iloc[i])}")
 
         st.markdown(f"""
 - **Buy & Hold:**    {(df_c['CumBH'].iloc[-1]-1)*100:.2f}%  
