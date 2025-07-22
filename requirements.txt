@@ -5,3 +5,4 @@ numpy
 matplotlib
 nltk
 vaderSentiment
+plotly>=5.0.0
