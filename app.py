@@ -9,6 +9,13 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
 analyzer = SentimentIntensityAnalyzer()
 
+# ───────────────────────────── Mappings ─────────────────────────────
+rec_map = {
+    1: "🟢 BUY",
+    0: "🟡 HOLD",
+   -1: "🔴 SELL",
+}
+
 # ───────────────────────────── Tabs ─────────────────────────────
 tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 
