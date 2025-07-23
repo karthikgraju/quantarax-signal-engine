@@ -22,9 +22,31 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 # ───────────────────────────── Help Tab ─────────────────────────────
 with tab_help:
     st.header("How QuantaraX Works")
-    st.markdown("""
-Welcome to **QuantaraX**—your interactive toolkit for composite technical signals and portfolio simulations.  
-This guide will walk you through every indicator, control, and feature.
+        st.markdown(r"""
+Welcome to **QuantaraX**, the MVP from a hands-on team of quants, data scientists, and former traders on a mission to **democratize** institutional-grade quantitative tools for **every** investor.
+
+---
+
+## 🎯 Our Purpose & Mission
+
+We believe retail investors deserve the same rigor, clarity, and transparency that professional funds enjoy.  
+**QuantaraX** exists to:
+
+- **Demystify** technical analysis by **combining** multiple indicators into one clear, composite recommendation.  
+- **Reduce emotional bias** by delivering consistent, rules-based signals.  
+- **Empower** users through **education**, exposing the “why” behind every BUY, HOLD, or SELL.  
+- **Accelerate** decision-making with live prices, sentiment-weighted news, and portfolio simulations.  
+- **Scale** from a weekend MVP to a full platform with real-time alerts, multi-asset support, and broker connectivity.
+
+---
+
+## 🏆 Objectives
+
+1. **Deliver** a polished MVP by week’s end for investor demos.  
+2. **Onboard** 100+ beta users in the next 30 days and iterate on feedback.  
+3. **Integrate** real-time streaming data & push notifications (Q3).  
+4. **Expand** to crypto, forex, and alternative data sets (Q4).  
+5. **Build** community-driven features—strategy sharing, crowd sentiment.
 
 ---
 
