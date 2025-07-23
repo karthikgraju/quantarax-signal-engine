@@ -269,11 +269,11 @@ with tab_engine:
             else:
                 rsi_txt="RSI unavailable."
             macd_txt={1:"MACD ↑ signal line.",0:"No crossover.",-1:"MACD ↓ signal line."}[macd_s]
-            with st.expander(f"🔎 {t} Reasoning ({df_watch.loc[t,'Signal']})"):
-                st.write(f"- **MA:**  {ma_txt}")
-                st.write(f"- **RSI:** {rsi_txt}")
-                st.write(f"- **MACD:** {macd_txt}")
-                st.write(f"- **Composite Score:** {df_watch.loc[t,'Composite']}")
+ with st.expander("🔎 Why This Signal?"):
+            st.write(f"- **MA:**  {ma_txt}")
+            st.write(f"- **RSI:** {rsi_txt}")
+            st.write(f"- **MACD:** {macd_txt}")
+            st.write(f"- **Composite Score:** {int(df_c['Composite'].iloc[-1])}")
 
 # ───────────────────────────── Portfolio Simulator ─────────────────────────────
 with tab_port:
