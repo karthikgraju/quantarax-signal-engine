@@ -267,30 +267,46 @@ with tab_engine:
     watch = st.text_area("Enter tickers","AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("📬 Generate Watchlist Summary"):
         table=[]
-        for t in [s.strip() for s in watch.split(",") if s.strip()]:
+   for t in df_watch.index:
             df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
             if df_t.empty:
-                table.append({"Ticker":t,"Composite":None,"Signal":"N/A"})
                 continue
-            df_w,_,_,_ = backtest(build_composite(df_t, ma_window, rsi_period))
-            table.append({
-                "Ticker":t,
-                "Composite":int(df_w["Composite"].iloc[-1]),
-                "Signal":rec_map[int(df_w["Trade"].iloc[-1])]
-            })
-        df_watch = pd.DataFrame(table).set_index("Ticker")
-        st.dataframe(df_watch, use_container_width=True)
-
-        for t in df_watch.index:
-            df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-            if df_t.empty: continue
-            df_c = build_composite(df_t, ma_window, rsi_period)  # <— fixed here
+            df_c = build_composite(df_t, ma_window, rsi_period)
             last = df_c.iloc[-1]
-            ma_s, rsi_s, macd_s = int(last["MA_Signal"]), int(last["RSI_Signal"]), int(last["MACD_Signal2"])
-            rsi_v = last[f"RSI{rsi_period}"]
-            ma_txt = {1:f"Price ↑ above {ma_window}-day MA.",0:"No crossover.",-1:f"Price ↓ below MA."}[ma_s]
-            rsi_txt= {1:f"RSI ({rsi_v:.1f}) <30 oversold.",0:f"RSI ({rsi_v:.1f}) neutral.",-1:f"RSI ({rsi_v:.1f}) >70 overbought."}[rsi_s]
-            macd_txt={1:"MACD ↑ signal.",0:"No crossover.",-1:"MACD ↓ signal."}[macd_s]
+
+            # Extract raw signals
+            ma_s   = int(last["MA_Signal"])
+            rsi_s  = int(last["RSI_Signal"])
+            macd_s = int(last["MACD_Signal2"])
+
+            # Safe RSI formatting
+            try:
+                rsi_v = float(last[f"RSI{rsi_period}"])
+                valid = True
+            except:
+                valid = False
+
+            # Build texts
+            ma_txt = {
+                1: f"Price ↑ above {ma_window}-day MA.",
+                0: "No crossover.",
+               -1: f"Price ↓ below {ma_window}-day MA."
+            }[ma_s]
+
+            if valid:
+                rsi_txt = {
+                    1: f"RSI ({rsi_v:.1f}) < 30 → oversold.",
+                    0: f"RSI ({rsi_v:.1f}) neutral.",
+                   -1: f"RSI ({rsi_v:.1f}) > 70 → overbought."
+                }[rsi_s]
+            else:
+                rsi_txt = "RSI data unavailable."
+
+            macd_txt = {
+                1: "MACD line crossed **above** its signal line.",
+                0: "No crossover.",
+               -1: "MACD line crossed **below** its signal line."
+            }[macd_s]
 
             with st.expander(f"🔎 {t} Reasoning ({df_watch.loc[t,'Signal']})"):
                 st.write(f"- **MA:**  {ma_txt}")
