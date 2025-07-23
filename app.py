@@ -8,50 +8,36 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals", layout="centered")
 analyzer = SentimentIntensityAnalyzer()
-
-# ───────────────────────────── Mappings ─────────────────────────────
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
 # ───────────────────────────── Tabs ─────────────────────────────
-tab_engine, tab_help, tab_port = st.tabs(["🚀 Engine", "❓ How It Works", "💼 Portfolio Simulator"])
+tab_engine, tab_help, tab_port = st.tabs(
+    ["🚀 Engine", "❓ How It Works", "💼 Portfolio Simulator"]
+)
 
-# ───────────────────────────── Help Tab ─────────────────────────────
+# ───────────────────────────── How It Works ─────────────────────────────
 with tab_help:
     st.header("How QuantaraX Works")
     st.markdown("""
 **QuantaraX** combines three indicators into a single composite vote:
 
 1. **Moving Average Crossover**  
-   - Simple MA over *N* days. Bull when price crosses above, bear when below.
-
 2. **RSI**  
-   - Momentum oscillator. Bull if RSI < 30 (oversold), bear if RSI > 70 (overbought).
-
 3. **MACD Crossover**  
-   - EMA fast vs. slow difference + signal line. Bull on crossover up, bear on crossover down.
 
-Each gives +1 (bull), –1 (bear), or 0 (neutral). Sum (–3…+3) → **Composite**.  
-Position = sign(composite):  
-• ≥+1 → BUY  
-• =0  → HOLD  
-• ≤–1 → SELL
+Each gives +1/–1/0 → sum to a Composite (–3…+3) → BUY/HOLD/SELL.
 
-Under **Engine** you can:  
-• Backtest a single ticker  
-• Batch-test many tickers  
-• Grid-search your parameters  
-• View a watchlist summary with reasoning  
-• See recent news & sentiment overlay  
+Under **Engine** you can backtest, batch-test, grid-search, watchlist, news & sentiment.  
+Under **Portfolio Simulator** you can paste your positions CSV to see P&L and latest signals.
 """)
 
-# ───────────────────────────── Engine Tab ─────────────────────────────
+# ───────────────────────────── Engine ─────────────────────────────
 with tab_engine:
 
-    # Defaults & Session State
+    # Session defaults
     DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9)
     for k, v in DEFAULTS.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+        st.session_state.setdefault(k, v)
 
     # Sidebar controls
     st.sidebar.header("Controls")
@@ -60,14 +46,14 @@ with tab_engine:
             st.session_state[k] = v
 
     st.sidebar.header("Indicator Parameters")
-    ma_window   = st.sidebar.slider("MA window",      5, 50, st.session_state["ma_window"],   key="ma_window")
-    rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="rsi_period")
-    macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="macd_fast")
-    macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state["macd_slow"],   key="macd_slow")
-    macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal")
+    ma_window   = st.sidebar.slider("MA window",      5, 50, st.session_state.ma_window,   key="ma_window")
+    rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state.rsi_period,  key="rsi_period")
+    macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state.macd_fast,   key="macd_fast")
+    macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state.macd_slow,   key="macd_slow")
+    macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state.macd_signal, key="macd_signal")
 
+    # Title
     st.title("🚀 QuantaraX — Composite Signal Engine")
-    st.write("MA + RSI + MACD Composite Signals & Backtest")
 
     @st.cache_data(show_spinner=False)
     def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
@@ -75,86 +61,92 @@ with tab_engine:
         if df.empty or "Close" not in df:
             return pd.DataFrame()
         # MA
-        ma_col = f"MA{ma_w}"
-        df[ma_col] = df["Close"].rolling(ma_w).mean()
+        df[f"MA{ma_w}"] = df["Close"].rolling(ma_w).mean()
         # RSI
         d = df["Close"].diff()
         up = d.clip(lower=0); dn = -d.clip(upper=0)
         ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
-        rsi_col  = f"RSI{rsi_p}"
-        df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
+        df[f"RSI{rsi_p}"] = 100 - 100/(1 + ema_up/ema_down)
         # MACD
-        ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
-        ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
-        macd     = ema_f - ema_s
-        macd_sig = macd.ewm(span=sig, adjust=False).mean()
-        df["MACD"] = macd; df["MACD_Signal"] = macd_sig
+        ema_f = df["Close"].ewm(span=mf, adjust=False).mean()
+        ema_s = df["Close"].ewm(span=ms, adjust=False).mean()
+        macd  = ema_f - ema_s
+        df["MACD"] = macd
+        df["MACD_Signal"] = macd.ewm(span=sig, adjust=False).mean()
         # Drop NAs
-        cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
-        prs  = [c for c in cols if c in df.columns]
-        if prs:
-            try: df = df.dropna(subset=prs).reset_index(drop=True)
-            except KeyError: pass
+        cols = [f"MA{ma_w}", f"RSI{rsi_p}", "MACD", "MACD_Signal"]
+        df = df.dropna(subset=cols).reset_index(drop=True)
         return df
 
     def build_composite(df, ma_w, rsi_p):
         n = len(df)
-        close, ma = df["Close"].to_numpy(), df[f"MA{ma_w}"].to_numpy()
-        rsi, macd, sig = df[f"RSI{rsi_p}"].to_numpy(), df["MACD"].to_numpy(), df["MACD_Signal"].to_numpy()
-        ma_sig = np.zeros(n,int); rsi_sig = np.zeros(n,int); macd_sig2 = np.zeros(n,int)
-        comp, trade = np.zeros(n,int), np.zeros(n,int)
+        ma = df[f"MA{ma_w}"].to_numpy()
+        rsi = df[f"RSI{rsi_p}"].to_numpy()
+        macd = df["MACD"].to_numpy()
+        sigl = df["MACD_Signal"].to_numpy()
+
+        ma_sig = np.zeros(n,int)
+        rsi_sig = np.zeros(n,int)
+        macd_sig2 = np.zeros(n,int)
+        comp = np.zeros(n,int)
+        trade = np.zeros(n,int)
+
         for i in range(1,n):
-            if close[i-1]<ma[i-1] and close[i]>ma[i]:   ma_sig[i]=1
-            elif close[i-1]>ma[i-1] and close[i]<ma[i]: ma_sig[i]=-1
-            if rsi[i]<30:   rsi_sig[i]=1
-            elif rsi[i]>70: rsi_sig[i]=-1
-            if macd[i-1]<sig[i-1] and macd[i]>sig[i]:   macd_sig2[i]=1
-            elif macd[i-1]>sig[i-1] and macd[i]<sig[i]: macd_sig2[i]=-1
-            comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
+            if df["Close"][i-1] < ma[i-1] and df["Close"][i] > ma[i]:
+                ma_sig[i] = 1
+            elif df["Close"][i-1] > ma[i-1] and df["Close"][i] < ma[i]:
+                ma_sig[i] = -1
+            if rsi[i] < 30:
+                rsi_sig[i] = 1
+            elif rsi[i] > 70:
+                rsi_sig[i] = -1
+            if macd[i-1] < sigl[i-1] and macd[i] > sigl[i]:
+                macd_sig2[i] = 1
+            elif macd[i-1] > sigl[i-1] and macd[i] < sigl[i]:
+                macd_sig2[i] = -1
+            comp[i] = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
             trade[i] = np.sign(comp[i])
-        df["MA_Signal"], df["RSI_Signal"]   = ma_sig, rsi_sig
-        df["MACD_Signal2"], df["Composite"] = macd_sig2, comp
-        df["Trade"] = trade
+
+        df["MA_Signal"]    = ma_sig
+        df["RSI_Signal"]   = rsi_sig
+        df["MACD_Signal2"] = macd_sig2
+        df["Composite"]    = comp
+        df["Trade"]        = trade
         return df
 
     def backtest(df):
         df = df.copy()
         df["Return"]   = df["Close"].pct_change().fillna(0)
         df["Position"] = df["Trade"].shift(1).fillna(0).clip(0,1)
-        df["StratRet"] = df["Position"]*df["Return"]
-        df["CumBH"], df["CumStrat"] = (1+df["Return"]).cumprod(), (1+df["StratRet"]).cumprod()
-        dd = df["CumStrat"]/df["CumStrat"].cummax() -1
+        df["StratRet"] = df["Position"] * df["Return"]
+        df["CumBH"]    = (1+df["Return"]).cumprod()
+        df["CumStrat"] = (1+df["StratRet"]).cumprod()
+        dd = df["CumStrat"] / df["CumStrat"].cummax() - 1
         max_dd = dd.min()*100
-        std   = df["StratRet"].std()
+        std = df["StratRet"].std()
         sharpe = (df["StratRet"].mean()/std*np.sqrt(252)) if std else np.nan
         win_rt = (df["StratRet"]>0).mean()*100
         return df, max_dd, sharpe, win_rt
 
-    # Single‐Ticker Backtest
-    st.markdown("## Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL)","AAPL").upper()
-
+    # --- Single Ticker ---
+    st.markdown("### Single‐Ticker Backtest")
+    ticker = st.text_input("Ticker (e.g. AAPL)", "AAPL").upper()
     if ticker:
         info  = yf.Ticker(ticker).info
         price = info.get("regularMarketPrice")
         if price: st.subheader(f"💲 Live Price: ${price:.2f}")
         news = getattr(yf.Ticker(ticker),"news",[]) or []
         if news:
-            st.markdown("### 📰 Recent News & Sentiment")
-            shown=0
-            for art in news:
+            st.markdown("#### 📰 Recent News & Sentiment")
+            for art in news[:5]:
                 title, link = art.get("title",""), art.get("link","")
-                if not (title and link): continue
-                txt   = art.get("summary", title)
+                txt = art.get("summary", title)
                 score = analyzer.polarity_scores(txt)["compound"]
-                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
-                st.markdown(f"- [{title}]({link}) {emoji}")
-                shown+=1
-                if shown>=5: break
-            if shown==0: st.info("No recent news found.")
+                emo = "🔺" if score>0.1 else ("🔻" if score< -0.1 else "➖")
+                st.markdown(f"- [{title}]({link}) {emo}")
         else:
-            st.info("No recent news found.")
+            st.info("No news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
@@ -164,8 +156,9 @@ with tab_engine:
         rec = rec_map[int(df_c["Trade"].iloc[-1])]
         st.success(f"**{ticker}**: {rec}")
 
-        # Explain
-        ma_s, rsi_s, macd_s = (int(df_c[col].iloc[-1]) for col in ["MA_Signal","RSI_Signal","MACD_Signal2"])
+        # explain
+        ma_s, rsi_s, macd_s = map(lambda c: int(df_c[c].iloc[-1]),
+                                  ["MA_Signal","RSI_Signal","MACD_Signal2"])
         rsi_v = df_c[f"RSI{rsi_period}"].iloc[-1]
         ma_txt  = {1:f"Price ↑ above {ma_window}-day MA.",0:"No crossover.",-1:f"Price ↓ below MA."}[ma_s]
         rsi_txt = {1:f"RSI ({rsi_v:.1f}) <30 oversold.",0:f"RSI ({rsi_v:.1f}) neutral.",-1:f"RSI ({rsi_v:.1f}) >70 overbought."}[rsi_s]
@@ -184,19 +177,18 @@ with tab_engine:
 - **Max Drawdown:**  {max_dd:.2f}%  
 - **Win Rate:**      {win_rt:.1f}%  
 """)
-
         fig, axs = plt.subplots(3,1,figsize=(10,12), sharex=True)
         axs[0].plot(df_c["Close"], label="Close"); axs[0].plot(df_c[f"MA{ma_window}"], label=f"MA{ma_window}")
         axs[0].legend(); axs[0].set_title("Price & MA")
         axs[1].bar(df_c.index, df_c["Composite"], color="purple"); axs[1].set_title("Composite Vote")
-        axs[2].plot(df_c["CumBH"], ":", label="Buy & Hold"); axs[2].plot(df_c["CumStrat"], "-", label="Strategy")
+        axs[2].plot(df_c["CumBH"],":",label="Buy & Hold"); axs[2].plot(df_c["CumStrat"],"-",label="Strategy")
         axs[2].legend(); axs[2].set_title("Equity Curves")
         plt.xticks(rotation=45); plt.tight_layout(); st.pyplot(fig)
 
-    # Batch Backtest
+    # --- Batch Backtest ---
     st.markdown("---")
-    st.markdown("## Batch Backtest")
-    batch = st.text_area("Tickers (comma-separated)","AAPL, MSFT, TSLA, SPY, QQQ").upper()
+    st.markdown("### Batch Backtest")
+    batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("▶️ Run Batch Backtest"):
         perf=[]
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
@@ -209,54 +201,71 @@ with tab_engine:
                 "Signal": rec_map[int(df_tc["Trade"].iloc[-1])],
                 "BuyHold %": (df_tc["CumBH"].iloc[-1]-1)*100,
                 "Strategy %": (df_tc["CumStrat"].iloc[-1]-1)*100,
-                "Sharpe": sh, "Max Drawdown %": md, "Win Rate %": wr
+                "Sharpe": sh, "MaxDD %": md, "Win %": wr
             })
         if perf:
-            df_perf=pd.DataFrame(perf).set_index("Ticker")
+            df_perf = pd.DataFrame(perf).set_index("Ticker")
             st.dataframe(df_perf, use_container_width=True)
             st.download_button("Download CSV", df_perf.to_csv(), "batch.csv")
         else:
             st.error("No valid data for batch tickers.")
 
-    # Hyperparameter Optimization
+    # --- Hyperparameter Optimization ---
     st.markdown("---")
-    st.markdown("## 🛠️ Hyperparameter Optimization")
+    st.markdown("### 🛠️ Hyperparameter Optimization")
     ma_list  = st.sidebar.multiselect("MA windows",[5,10,15,20,30],default=[ma_window],key="grid_ma")
     rsi_list = st.sidebar.multiselect("RSI lookbacks",[7,14,21,28],default=[rsi_period],key="grid_rsi")
     mf_list  = st.sidebar.multiselect("MACD fast spans",[8,12,16,20],default=[macd_fast],key="grid_mf")
     ms_list  = st.sidebar.multiselect("MACD slow spans",[20,26,32,40],default=[macd_slow],key="grid_ms")
     sig_list = st.sidebar.multiselect("MACD sig spans",[5,9,12,16],default=[macd_signal],key="grid_sig")
-
     if st.button("🏃‍♂️ Run Grid Search"):
         if not ticker: st.error("Enter ticker"); st.stop()
         df_f = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
         if df_f.empty: st.error(f"No data for '{ticker}'"); st.stop()
         res=[]
-        with st.spinner("Testing…"):
+        with st.spinner("Testing combos…"):
             for mw in ma_list:
                 for rp in rsi_list:
                     for mf_ in mf_list:
                         for ms_ in ms_list:
                             for s_ in sig_list:
-                                df_i = load_and_compute(ticker, mw, rp, mf_, ms_, s_)
+                                df_i = load_and_compute(ticker,mw,rp,mf_,ms_,s_)
                                 if df_i.empty: continue
-                                df_ci, md_i, sh_i, wr_i = backtest(build_composite(df_i, mw, rp))
+                                df_ci, md_i, sh_i, wr_i = backtest(build_composite(df_i,mw,rp))
                                 res.append({
                                     "MA":mw,"RSI":rp,"MACD_Fast":mf_,"MACD_Slow":ms_,"MACD_Sig":s_,
-                                    "Strategy %":(df_ci["CumStrat"].iloc[-1]-1)*100,
-                                    "Sharpe":sh_i,"Max Drawdown %":md_i,"Win Rate %":wr_i
+                                    "Return %":(df_ci["CumStrat"].iloc[-1]-1)*100,
+                                    "Sharpe":sh_i,"MaxDD %":md_i,"Win %":wr_i
                                 })
         if res:
-            df_g=pd.DataFrame(res).sort_values("Strategy %",ascending=False).head(10)
+            df_g=pd.DataFrame(res).sort_values("Return %",ascending=False).head(10)
             st.dataframe(df_g,use_container_width=True)
             st.download_button("Download CSV", df_g.to_csv(index=False), "grid.csv")
         else:
-            st.error("No valid combos")
+            st.error("No valid combos found.")
+
+    # --- Watchlist Summary ---
+    st.markdown("---")
+    st.markdown("### ⏰ Watchlist Summary")
+    watch = st.text_area("Enter tickers","AAPL, MSFT, TSLA, SPY, QQQ").upper()
+    if st.button("📬 Generate Watchlist Summary"):
+        tbl=[]
+        for t in [x.strip() for x in watch.split(",") if x.strip()]:
+            df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
+            if df_t.empty:
+                tbl.append({"Ticker":t,"Composite":None,"Signal":"N/A"})
+                continue
+            df_w,_,_,_ = backtest(build_composite(df_t, ma_window, rsi_period))
+            comp = int(df_w["Composite"].iloc[-1])
+            sig  = rec_map[int(df_w["Trade"].iloc[-1])]
+            tbl.append({"Ticker":t,"Composite":comp,"Signal":sig})
+        df_watch = pd.DataFrame(tbl).set_index("Ticker")
+        st.dataframe(df_watch, use_container_width=True)
 
 # ───────────────────────────── Portfolio Simulator ─────────────────────────────
 with tab_port:
     st.header("💼 Portfolio Simulator")
-    st.markdown("Paste your positions as CSV (Ticker,Quantity,Buy_Price) and hit simulate.")
+    st.markdown("Paste your positions CSV below (TICKER,QUANTITY,BUY_PRICE), then simulate.")
 
     template = "TICKER,QUANTITY,BUY_PRICE\nAAPL,10,150\nMSFT,5,280"
     raw = st.text_area("Positions CSV", template, height=120)
@@ -264,35 +273,25 @@ with tab_port:
         try:
             pos = pd.read_csv(pd.compat.StringIO(raw))
         except Exception:
-            st.error("Failed to parse CSV. Columns: TICKER, QUANTITY, BUY_PRICE")
+            st.error("Parse error—ensure columns TICKER,QUANTITY,BUY_PRICE")
             st.stop()
-
-        results = []
+        results=[]
         for _, r in pos.iterrows():
-            t = r["TICKER"].upper()
-            q = float(r["QUANTITY"])
-            bp = float(r["BUY_PRICE"])
+            t = r["TICKER"].upper(); q=float(r["QUANTITY"]); bp=float(r["BUY_PRICE"])
             df  = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
             if df.empty: continue
-            current = df["Close"].iloc[-1]
-            pnl_dol = (current - bp) * q
-            pnl_pct = (current/bp -1)*100
-            sig     = rec_map[int(build_composite(df,ma_window,rsi_period)["Trade"].iloc[-1])]
+            cur = df["Close"].iloc[-1]
+            pnl_d = (cur - bp)*q
+            pnl_p = (cur/bp-1)*100
+            sig = rec_map[int(build_composite(df,ma_window,rsi_period)["Trade"].iloc[-1])]
             results.append({
-                "Ticker": t,
-                "Qty": q,
-                "Buy Price": bp,
-                "Current Price": current,
-                "P&L ($)": pnl_dol,
-                "P&L (%)": pnl_pct,
-                "Latest Signal": sig
+                "Ticker":t,"Qty":q,"Buy Price":bp,
+                "Current":cur,"P&L ($)":pnl_d,"P&L (%)":pnl_p,"Signal":sig
             })
-
         if results:
-            df_port = pd.DataFrame(results).set_index("Ticker")
+            df_port=pd.DataFrame(results).set_index("Ticker")
             st.dataframe(df_port, use_container_width=True)
-            total = df_port["P&L ($)"].sum()
-            avgp  = df_port["P&L (%)"].mean()
-            st.markdown(f"**Total P&L:** ${total:.2f}   —   **Avg %:** {avgp:.2f}%")
+            total = df_port["P&L ($)"].sum(); avgp=df_port["P&L (%)"].mean()
+            st.markdown(f"**Total P&L:** ${total:.2f} — **Avg %:** {avgp:.2f}%")
         else:
             st.info("No valid positions to simulate.")
