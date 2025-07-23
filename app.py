@@ -22,7 +22,7 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 # ───────────────────────────── Help Tab ─────────────────────────────
 with tab_help:
     st.header("How QuantaraX Works")
-        st.markdown(r"""
+    st.markdown(r"""
 Welcome to **QuantaraX**, the MVP from a hands-on team of quants, data scientists, and former traders on a mission to **democratize** institutional-grade quantitative tools for **every** investor.
 
 ---
