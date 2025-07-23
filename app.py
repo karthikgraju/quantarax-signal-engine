@@ -21,125 +21,24 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 
 # ───────────────────────────── Help Tab ─────────────────────────────
 with tab_help:
-    st.header("🔍 How QuantaraX Works — A Deep Dive")
-    st.markdown(r"""
-Welcome to **QuantaraX**, your one-stop interactive lab for exploring composite technical signals, backtests, and portfolio simulations. This guide will walk you through:
+    st.header("How QuantaraX Works")
+    st.markdown("""
+**QuantaraX** combines three indicators into a single composite vote:
 
----
+1. **Moving Average Crossover**  
+2. **RSI**  
+3. **MACD Crossover**
 
-## 1. Core Indicators
+Each gives +1, 0 or –1 → sum into a composite.  
+Position = sign(composite): BUY / HOLD / SELL.
 
-### 1.1 Moving Average (MA) Crossover  
-- **Definition**:  
-  \[
-    \text{MA}_N(t) = \frac{1}{N} \sum_{i=0}^{N-1} \text{Close}(t-i)
-  \]  
-- **Interpretation**:  
-  - Smooths price over _N_ days.  
-  - **Bull (+1)** when price crosses **upward** through its MA → momentum shift.  
-  - **Bear (–1)** when price crosses **downward** through its MA → momentum weakening.  
-  - **Neutral (0)** otherwise.  
-- **Slider “MA window”** controls _N_. Larger _N_ → fewer false signals, more lag; smaller _N_ → more responsive, more noise.
-
-### 1.2 Relative Strength Index (RSI)  
-- **Definition**:  
-  1. Compute daily change Δ = Closeₜ – Closeₜ₋₁.  
-  2. Separate gains (↑) and losses (↓) and apply EMA _(com = period–1)_:  
-     \[
-       \text{RSI}(t) = 100 - \frac{100}{1 + \dfrac{\text{EMA}_{\uparrow}}{\text{EMA}_{\downarrow}}}
-     \]  
-- **Interpretation**:  
-  - Reads 0–100 scale: <30 oversold, >70 overbought.  
-  - **Bull (+1)** if RSI < 30.  
-  - **Bear (–1)** if RSI > 70.  
-  - **Neutral (0)** in between.  
-- **Slider “RSI lookback”** controls the EMA period. Shorter → choppier; longer → smoother.
-
-### 1.3 MACD Crossover  
-- **Definition**:  
-  \[
-    \text{MACD}(t) = \text{EMA}_{\text{fast}}(t) - \text{EMA}_{\text{slow}}(t)
-  \quad;\quad
-    \text{Signal}(t) = \text{EMA}_{\text{sig}}(\text{MACD})
-  \]  
-- **Interpretation**:  
-  - **Bull (+1)** when MACD line crosses **above** its signal line.  
-  - **Bear (–1)** when MACD line crosses **below** its signal line.  
-  - **Neutral (0)** otherwise.  
-- **Sliders** “MACD fast span”, “MACD slow span”, “MACD sig span” control the three EMAs. Defaults (12, 26, 9) mimic classic setting.
-
----
-
-## 2. Composite Vote & Recommendation
-
-1. **Sum** the three indicator signals:  
-   \[
-     \text{Composite} = \sum (\text{MA signal} + \text{RSI signal} + \text{MACD signal})
-   \]
-   Range: –3 … +3  
-2. **Position** = sign(Composite):  
-   - ≥ +1 → **BUY** 🟢  
-   -   0 → **HOLD** 🟡  
-   - ≤ –1 → **SELL** 🔴  
-
----
-
-## 3. Sidebar Controls & Defaults
-
-| Control                   | Purpose                                                                 |
-|---------------------------|-------------------------------------------------------------------------|
-| **Reset to defaults**     | Restore (MA=10, RSI=14, MACD fast=12, MACD slow=26, MACD sig=9)         |
-| **MA window**             | Number of days for moving average                                       |
-| **RSI lookback**          | Number of periods for RSI EMA                                           |
-| **MACD fast span**        | EMA span for the MACD “fast” line                                       |
-| **MACD slow span**        | EMA span for the MACD “slow” line                                       |
-| **MACD sig span**         | EMA span for the MACD signal line                                       |
-| **Profit target / Loss limit** (Portfolio tab) | Unrealized P/L thresholds to override composite suggestion |
-
----
-
-## 4. Single-Ticker Backtest Workflow
-
-1. **Enter** ticker (e.g. `AAPL`).  
-2. **Live Price** & **News** panel:  
-   - Current market price.  
-   - Top 5 recent headlines colored by sentiment (VADER).  
-3. Click **Run Composite Backtest** →  
-   - **Data**: downloads 6 months price history.  
-   - **Compute**: MA, RSI, MACD, signals & composite.  
-   - **Output**:  
-     - **Final Rec** (BUY/HOLD/SELL) with color icon.  
-     - **“Why?”** expander: per-indicator rationale (e.g. “Price crossed above 10 MA”).  
-     - **Stats**:
-       - Cumulative %: Buy-&-Hold vs. strategy  
-       - Sharpe ratio (annualized)  
-       - Max drawdown (%)  
-       - Win rate (%)  
-     - **Charts**:
-       1. Price & MA  
-       2. Composite vote history  
-       3. Equity curves  
-
----
-
-## 5. Batch Backtest
-
-- **Tickers**: comma-separated list.  
-- Click **Run Batch** → tabular comparison:  
-  - Last composite score & signal  
-  - Returns, Sharpe, drawdown, win rate  
-- **Download CSV** for offline analysis.
-
----
-
-## 6. Portfolio Simulator
-
-1. **Profit target** / **Loss limit** sliders set P/L thresholds.  
-2. **Holdings input**:  
-   ```text
-   TICKER, shares, cost_basis
-   AAPL,10,150
-   MSFT,5,300
+Under **Engine** you can:  
+• Backtest a single ticker  
+• Batch-test many tickers  
+• Grid-search your parameters  
+• View a watchlist summary with reasoning  
+• See recent news & sentiment overlay  
+""")
 
 # ───────────────────────────── Engine Tab ─────────────────────────────
 with tab_engine:
