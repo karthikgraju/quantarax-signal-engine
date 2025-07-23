@@ -339,7 +339,7 @@ if st.button("▶️ Simulate Portfolio"):
 
 
 
-    # ─────────── Hyperparameter Optimization ───────────
+# ─────────── Hyperparameter Optimization ───────────
     st.markdown("---")
     st.markdown("## 🛠️ Hyperparameter Optimization")
     ma_list  = st.sidebar.multiselect("MA windows",[5,10,15,20,30],default=[ma_window], key="grid_ma")
@@ -378,7 +378,7 @@ if st.button("▶️ Simulate Portfolio"):
         else:
             st.error("No valid parameter combinations found.")
 
-    # ─────────── Watchlist Summary ───────────
+# ─────────── Watchlist Summary ───────────
     st.markdown("---")
     st.markdown("## ⏰ Watchlist Summary")
     watch = st.text_area("Enter tickers","AAPL, MSFT, TSLA, SPY, QQQ").upper()
