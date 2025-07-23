@@ -249,42 +249,61 @@ with tab_engine:
     # ─────────── Portfolio Simulator ───────────
     st.markdown("---")
     st.markdown("## 📊 Portfolio Simulator")
-    st.info("Enter your current or planned positions in CSV format: ticker,shares,cost_basis")
+    st.info("Enter your positions in CSV: ticker,shares,cost_basis")
     holdings = st.text_area("e.g.\nAAPL,10,150\nMSFT,5,300", height=100)
+
     if st.button("▶️ Simulate Portfolio"):
         rows = [r.strip().split(",") for r in holdings.splitlines() if r.strip()]
         data = []
         for ticker_, shares, cost in rows:
+            ticker_u = ticker_.upper().strip()
             try:
                 s = float(shares)
                 c = float(cost)
             except:
                 continue
-            hist = yf.Ticker(ticker_.upper()).history(period="1d")
+
+            # current price + P/L
+            hist = yf.Ticker(ticker_u).history(period="1d")
             if hist.empty: continue
             price = hist["Close"].iloc[-1]
             value = s * price
             invested = s * c
             pnl = value - invested
             pnl_pct = (pnl / invested * 100) if invested else np.nan
+
+            # --- NEW: compute latest composite signal
+            df_raw = load_and_compute(ticker_u, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
+            if df_raw.empty:
+                suggestion = "N/A"
+            else:
+                df_c = build_composite(df_raw, ma_window, rsi_period)
+                last_sig = int(df_c["Trade"].iloc[-1])
+                suggestion = rec_map.get(last_sig, "—")
+
             data.append({
-                "Ticker": ticker_.upper(),
-                "Shares": s,
-                "Cost Basis": c,
-                "Price": price,
-                "Market Value": value,
-                "Invested": invested,
-                "P/L": pnl,
-                "P/L %": pnl_pct
+                "Ticker":        ticker_u,
+                "Shares":        s,
+                "Cost Basis":    c,
+                "Price":         price,
+                "Market Value":  value,
+                "Invested":      invested,
+                "P/L":           pnl,
+                "P/L %":         pnl_pct,
+                "Suggestion":    suggestion,    # 🟢/🟡/🔴
             })
+
         if data:
             df_port = pd.DataFrame(data).set_index("Ticker")
             st.dataframe(df_port, use_container_width=True)
+
             total_mv = df_port["Market Value"].sum()
             total_inv = df_port["Invested"].sum()
             st.metric("Total Market Value", f"${total_mv:,.2f}")
-            st.metric("Total Invested", f"${total_inv:,.2f}")
-            st.metric("Total P/L", f"${total_mv - total_inv:,.2f}")
+            st.metric("Total Invested",     f"${total_inv:,.2f}")
+            st.metric("Total P/L",          f"${total_mv - total_inv:,.2f}")
+
+            # pie chart remains unchanged
             fig, ax = plt.subplots()
             df_port["Market Value"].plot.pie(
                 autopct="%.1f%%", ax=ax
@@ -294,6 +313,7 @@ with tab_engine:
             st.pyplot(fig)
         else:
             st.error("No valid holdings provided.")
+
 
     # ─────────── Hyperparameter Optimization ───────────
     st.markdown("---")
