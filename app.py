@@ -7,7 +7,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import feedparser  # ← added for RSS fallback
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Composite Signals BETA v2", layout="centered")
+st.set_page_config(page_title="QuantarX Composite Signals BETA v2", layout="centered")
 analyzer = SentimentIntensityAnalyzer()
 
 # ───────────────────────────── Mappings ─────────────────────────────
@@ -22,21 +22,21 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 
 # ───────────────────────────── Help Tab ─────────────────────────────
 with tab_help:
-    st.header("How QuantaraX Works")
+    st.header("How QuantarX Works")
     st.markdown(r"""
-Welcome to **QuantaraX**, the MVP from a hands-on team of quants, data scientists, and former traders on a mission to **democratize** institutional-grade quantitative tools for **every** investor.
+Welcome to **QuantarX**, the MVP from a hands-on team of quants, data scientists, and former traders on a mission to **democratize** institutional-grade quantitative tools for **every** investor.
 
 ---
 
 ## 🌐 Asset Types
-QuantaraX supports both **Stocks** and **Crypto**.  
+QuantarX supports both **Stocks** and **Crypto**.  
 Use the **Asset Type** selector in the sidebar to toggle between symbols like `AAPL` (stock) or `BTC/USDT` (crypto).
 
 ---
 
 ## 🎯 Our Purpose & Mission
 We believe retail investors deserve the same rigor, clarity, and transparency that professional funds enjoy.  
-**QuantaraX** exists to:
+**QuantarX** exists to:
 - **Demystify** technical analysis by **combining** multiple indicators into one clear, composite recommendation.  
 - **Reduce emotional bias** by delivering consistent, rules-based signals.  
 - **Empower** users through **education**, exposing the “why” behind every BUY, HOLD, or SELL.  
@@ -128,7 +128,7 @@ with tab_engine:
         help="If unrealized P/L% falls below –this → BUY"
     )
 
-    st.title("🚀 QuantaraX — Composite Signal Engine")
+    st.title("🚀 QuantarX — Composite Signal Engine")
     st.write("MA + RSI + MACD Composite Signals & Backtest")
 
     # ─────────── Data Loading ───────────
