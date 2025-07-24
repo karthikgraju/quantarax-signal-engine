@@ -207,7 +207,7 @@ with tab_engine:
                     break
 
         if shown == 0:
-            st.markdown("### 📰 Recent News (RSS")
+            st.markdown("### 📰 Recent News (RSS)")
             rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
             feed    = feedparser.parse(rss_url)
             for entry in feed.entries:
