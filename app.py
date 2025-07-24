@@ -282,28 +282,77 @@ with tab_engine:
 
     # ─────────── Midday Movers ───────────
     st.markdown("---")
-    st.markdown("## 🌗 Midday Movers")
-    st.info("Enter comma-separated tickers to see today's % change from open.")
-    mid_tickers = st.text_input("Tickers (e.g. AAPL, MSFT, TSLA)", "AAPL, MSFT, TSLA").upper()
-    if st.button("🔍 Get Midday Movers"):
-        movers=[]
-        for t in [x.strip() for x in mid_tickers.split(",") if x.strip()]:
-            hist = yf.download(t, period="1d", interval="5m", progress=False)
-            if hist.empty: continue
-            open_p = hist["Open"].iloc[0]
-            curr_p = hist["Close"].iloc[-1]
-            change_pct = (curr_p - open_p)/open_p*100
+    st.markdown("## 🌤️ Midday Movers (Intraday % Change)")
+    mover_list = st.text_area(
+        "Tickers to monitor (comma-separated)",
+        "AAPL, MSFT, TSLA, SPY, QQQ"
+    ).upper()
+
+    if st.button("🔄 Get Midday Movers"):
+        movers = []
+        for sym in [s.strip() for s in mover_list.split(",") if s.strip()]:
+            # Download today's 5-minute bars
+            intraday = yf.download(sym, period="1d", interval="5m", progress=False)
+            if intraday.empty:
+                continue
+
+            open_price = intraday["Open"].iloc[0]
+            last_price = intraday["Close"].iloc[-1]
+            change_pct = (last_price - open_price) / open_price * 100
+
             movers.append({
-                "Ticker":t,
-                "Open":open_p,
-                "Current":curr_p,
-                "Change %":change_pct
+                "Ticker":   sym,
+                "Open":     open_price,
+                "Current":  last_price,
+                "Change %": change_pct
             })
+
         if movers:
-            df_m = pd.DataFrame(movers).set_index("Ticker").sort_values("Change %", ascending=False)
+            df_m = (
+                pd.DataFrame(movers)
+                  .set_index("Ticker")
+                  .sort_values(by="Change %", ascending=False)
+            )
             st.dataframe(df_m, use_container_width=True)
         else:
-            st.warning("No data available for those tickers.")
+            st.info("No valid intraday data found for those tickers.")
+    # ─────────── Midday Movers ───────────
+    st.markdown("---")
+    st.markdown("## 🌤️ Midday Movers (Intraday % Change)")
+    mover_list = st.text_area(
+        "Tickers to monitor (comma-separated)",
+        "AAPL, MSFT, TSLA, SPY, QQQ"
+    ).upper()
+
+    if st.button("🔄 Get Midday Movers"):
+        movers = []
+        for sym in [s.strip() for s in mover_list.split(",") if s.strip()]:
+            # Download today's 5-minute bars
+            intraday = yf.download(sym, period="1d", interval="5m", progress=False)
+            if intraday.empty:
+                continue
+
+            open_price = intraday["Open"].iloc[0]
+            last_price = intraday["Close"].iloc[-1]
+            change_pct = (last_price - open_price) / open_price * 100
+
+            movers.append({
+                "Ticker":   sym,
+                "Open":     open_price,
+                "Current":  last_price,
+                "Change %": change_pct
+            })
+
+        if movers:
+            df_m = (
+                pd.DataFrame(movers)
+                  .set_index("Ticker")
+                  .sort_values(by="Change %", ascending=False)
+            )
+            st.dataframe(df_m, use_container_width=True)
+        else:
+            st.info("No valid intraday data found for those tickers.")
+
 
     # ─────────── Portfolio Simulator ───────────
     st.markdown("---")
