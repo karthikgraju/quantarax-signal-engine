@@ -291,14 +291,14 @@ with tab_engine:
     if st.button("🔄 Get Midday Movers"):
         movers = []
         for sym in [s.strip() for s in mover_list.split(",") if s.strip()]:
-            # Download today's 5-minute bars
+            # 1. Download today's 5-minute bars
             intraday = yf.download(sym, period="1d", interval="5m", progress=False)
             if intraday.empty:
                 continue
 
             open_price = intraday["Open"].iloc[0]
             last_price = intraday["Close"].iloc[-1]
-            change_pct = (last_price - open_price) / open_price * 100
+            change_pct  = (last_price - open_price) / open_price * 100
 
             movers.append({
                 "Ticker":   sym,
@@ -308,15 +308,21 @@ with tab_engine:
             })
 
         if movers:
+            df_m = pd.DataFrame(movers)
+
+            # ensure numeric and drop any invalid rows
+            df_m["Change %"] = pd.to_numeric(df_m["Change %"], errors="coerce")
+            df_m = df_m.dropna(subset=["Change %"])
+
+            # set index and sort
             df_m = (
-                pd.DataFrame(movers)
-                  .set_index("Ticker")
-                  .sort_values(by="Change %", ascending=False)
+                df_m
+                .set_index("Ticker")
+                .sort_values("Change %", ascending=False)
             )
             st.dataframe(df_m, use_container_width=True)
         else:
             st.info("No valid intraday data found for those tickers.")
-
 
 
     # ─────────── Portfolio Simulator ───────────
