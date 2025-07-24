@@ -182,37 +182,28 @@ with tab_engine:
     st.markdown("## Single‐Ticker Backtest")
     ticker = st.text_input("Ticker (e.g. AAPL)","AAPL").upper()
 
-    raw_news = getattr(yf.Ticker(ticker), "news", []) or []
-    shown = 0
-
-    if raw_news:
-        st.markdown("### 📰 Recent News & Sentiment")
-        for art in raw_news:
-            title = art.get("title", "")
-            link  = art.get("link", "")
-            if not (title and link):
-                continue
-            summary = art.get("summary", title)
-            score   = analyzer.polarity_scores(summary)["compound"]
-            emoji   = "🔺" if score > 0.1 else ("🔻" if score < -0.1 else "➖")
-            st.markdown(f"- [{title}]({link}) {emoji}")
-            shown += 1
-            if shown >= 5:
-                break
-
-    if shown == 0:
-        st.markdown("### 📰 No recent yfinance news, falling back to RSS…")
-        rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-        feed    = feedparser.parse(rss_url)
-        shown   = 0
-        for entry in feed.entries:
-            st.markdown(f"- [{entry.title}]({entry.link})")
-            shown += 1
-            if shown >= 5:
-                break
-
-        if shown == 0:
-            st.info("No recent news found via RSS either.")
+    if ticker:
+        info  = yf.Ticker(ticker).info
+        price = info.get("regularMarketPrice")
+        if price is not None:
+            st.subheader(f"💲 Live Price: ${price:.2f}")
+        news = getattr(yf.Ticker(ticker), "news", []) or []
+        if news:
+            st.markdown("### 📰 Recent News & Sentiment")
+            shown = 0
+            for art in news:
+                title, link = art.get("title",""), art.get("link","")
+                if not (title and link): continue
+                txt   = art.get("summary", title)
+                score = analyzer.polarity_scores(txt)["compound"]
+                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
+                st.markdown(f"- [{title}]({link}) {emoji}")
+                shown += 1
+                if shown >= 5: break
+            if shown == 0:
+                st.info("No recent news found.")
+        else:
+            st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(ticker,ma_window,rsi_period,macd_fast,macd_slow,macd_signal)
