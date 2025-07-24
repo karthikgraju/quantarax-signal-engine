@@ -28,49 +28,38 @@ Welcome to **QuantaraX**, the MVP from a hands-on team of quants, data scientist
 
 ---
 
-## 🎯 Our Purpose & Mission
-
-We believe retail investors deserve the same rigor, clarity, and transparency that professional funds enjoy.  
-**QuantaraX** exists to:
-
-- **Demystify** technical analysis by **combining** multiple indicators into one clear, composite recommendation.  
-- **Reduce emotional bias** by delivering consistent, rules-based signals.  
-- **Empower** users through **education**, exposing the “why” behind every BUY, HOLD, or SELL.  
-- **Accelerate** decision-making with live prices, sentiment-weighted news, and portfolio simulations.  
-- **Scale** from a weekend MVP to a full platform with real-time alerts, multi-asset support, and broker connectivity.
+## 🌐 Asset Types
+QuantaraX now supports both **Stocks** and **Crypto**.  
+Use the **Asset Type** selector in the sidebar to switch between symbols like `AAPL` (stock) or `BTC/USDT` (crypto).
 
 ---
 
-## 🔧 Choosing Slider Settings
-
-**How do I know what slider to use?**  
-Every slider trades off **responsiveness** vs. **smoothness**. Below are some quick rules of thumb:
-
-| Slider                 | What it does                                | If you want…                                                              |
-|------------------------|---------------------------------------------|---------------------------------------------------------------------------|
-| **MA window**          | # of days for moving average               | • **Lower** (5–10) → more responsive, **more** false signals • **Higher** (20–50) → smoother, **fewer** signals |
-| **RSI lookback**       | Period for RSI’s EMA calculation           | • **Short** (5–10) → choppier, react to short-term swings • **Long** (20–30) → stable, ignores minor noise        |
-| **MACD fast span**     | EMA span for MACD’s fast line              | • **Lower** (5–10) → very quick to shift • **Higher** (15–20) → slower changes                                      |
-| **MACD slow span**     | EMA span for MACD’s slow line              | • Don’t set too close to fast span — keep at least +10 days difference                                                  |
-| **MACD sig span**      | EMA span for MACD’s signal line            | • **Lower** (5–9) → quick crossover triggers • **Higher** (12–16) → avoids whipsaws                                  |
-| **Profit target**      | Unrealized P/L% at which to **override** to SELL  | • Set your personal upside threshold—e.g. 5–20% • Smaller → take profits quickly, larger → ride trends longer       |
-| **Loss limit**         | Unrealized P/L% at which to **override** to BUY   | • Set your personal risk tolerance—e.g. 3–10% • Smaller → tighter stops, larger → more wiggle room                  |
-
-> **Tip:** start with the **defaults** (MA=10, RSI=14, MACD=12/26/9), and **tweak one at a time**.  
-> Watch how your backtest return, drawdown and win-rate change, then lock in the combination that matches your style.
+## 📰 Dual-Source News Feed
+We aggregate the latest headlines from:
+1. **Yahoo Finance API** (via yfinance) with sentiment via VADER  
+2. **RSS fallback** (Yahoo’s RSS)  
+  
+This ensures you see up to **5** timely, sentiment-weighted headlines even if one source is down.
 
 ---
 
-## 🏆 Objectives
+## 🔧 Indicator & Backtest Engine
+We compute **MA**, **RSI**, and **MACD** on 6 months of daily data (for crypto we map e.g. `BTC/USDT → BTC-USD`).  
+Signals:
+- **Buy/Hold/Sell** by combining crossovers & overbought/oversold  
+- **Composite Score** = sum of MA, RSI, MACD signals  
+- **Backtest** returns Buy & Hold vs. strategy performance, Sharpe, drawdown & win-rate.
 
-1. **Deliver** a polished MVP by week’s end for investor demos.  
-2. **Onboard** 100+ beta users in the next 30 days and iterate on feedback.  
-3. **Integrate** real-time streaming data & push notifications (Q3).  
-4. **Expand** to crypto, forex, and alternative data sets (Q4).  
-5. **Build** community-driven features—strategy sharing, crowd sentiment.
-
-Made in Toronto, Canada by KG
 ---
+
+## 📊 Portfolio & Batch Tools
+- **Batch Backtest:** run across multiple tickers at once  
+- **Midday Movers:** track intraday % changes  
+- **Portfolio Simulator:** upload your positions, get P/L, recommendations & allocation pie chart
+
+---
+
+> Made in Toronto, Canada by KG — now with crypto support 🚀
 """)
 
 # ───────────────────────────── Engine Tab ─────────────────────────────
