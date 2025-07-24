@@ -1,42 +1,45 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, shrink-to-fit=no"
-  />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>QuantaraX Composite Signals</title>
 
   <!-- PWA manifest & theme color -->
-  <link rel="manifest" href="./manifest.json" />
-  <meta name="theme-color" content="#4B5563" />
-
-  <!-- Favicon / home-screen icon -->
-  <link rel="icon" href="./logo-192.png" sizes="192x192" />
+  <link rel="manifest" href="./manifest.json"/>
+  <meta name="theme-color" content="#4B5563"/>
+  <link rel="icon" href="./logo-192.png" sizes="192x192"/>
 </head>
+<body style="font-family:sans-serif;text-align:center;margin-top:4rem;">
 
-<body>
-  <div style="font-family: sans-serif; text-align:center; margin-top:4rem;">
-    <h1>QuantaraX Composite Signals</h1>
-    <p>
-      Welcome to the QuantaraX PWA!<br/>
-      <a href="https://karthikgraju.github.io/quantarax-signal-engine/" target="_blank">
-        Launch the live app
-      </a>
-    </p>
-  </div>
+  <h1>QuantaraX Composite Signals</h1>
+  <p>
+    Welcome!<br/>
+    <a id="launch"
+       href="https://share.streamlit.io/karthikgraju/quantarax-signal-engine/main/app.py">
+      🔗 Launch Live Streamlit App
+    </a>
+  </p>
 
-  <!-- Register service worker -->
   <script>
+    // 1️⃣ Service‐Worker registration
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () =>
         navigator.serviceWorker
-          .register('./service-worker.js')
-          .then(reg => console.log('SW registered:', reg.scope))
-          .catch(err => console.error('SW registration failed:', err))
+                 .register('./service-worker.js')
+                 .then(reg => console.log('SW registered:', reg.scope))
+                 .catch(err => console.error('SW failed:', err))
       );
     }
+
+    // 2️⃣ iOS PWA link fix
+    if (window.navigator.standalone) {
+      document.getElementById('launch').addEventListener('click', e => {
+        e.preventDefault();
+        window.location = e.target.href;
+      });
+    }
   </script>
+
 </body>
 </html>
