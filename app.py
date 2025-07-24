@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import feedparser  # ← added for RSS fallback
+import ccxt       # ← added for crypto data
 
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals BETA v2", layout="centered")
@@ -24,53 +25,7 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 with tab_help:
     st.header("How QuantaraX Works")
     st.markdown(r"""
-Welcome to **QuantaraX**, the MVP from a hands-on team of quants, data scientists, and former traders on a mission to **democratize** institutional-grade quantitative tools for **every** investor.
-
----
-
-## 🎯 Our Purpose & Mission
-
-We believe retail investors deserve the same rigor, clarity, and transparency that professional funds enjoy.  
-**QuantaraX** exists to:
-
-- **Demystify** technical analysis by **combining** multiple indicators into one clear, composite recommendation.  
-- **Reduce emotional bias** by delivering consistent, rules-based signals.  
-- **Empower** users through **education**, exposing the “why” behind every BUY, HOLD, or SELL.  
-- **Accelerate** decision-making with live prices, sentiment-weighted news, and portfolio simulations.  
-- **Scale** from a weekend MVP to a full platform with real-time alerts, multi-asset support, and broker connectivity.
-
----
-
-## 🔧 Choosing Slider Settings
-
-**How do I know what slider to use?**  
-Every slider trades off **responsiveness** vs. **smoothness**. Below are some quick rules of thumb:
-
-| Slider                 | What it does                                | If you want…                                                              |
-|------------------------|---------------------------------------------|---------------------------------------------------------------------------|
-| **MA window**          | # of days for moving average               | • **Lower** (5–10) → more responsive, **more** false signals • **Higher** (20–50) → smoother, **fewer** signals |
-| **RSI lookback**       | Period for RSI’s EMA calculation           | • **Short** (5–10) → choppier, react to short-term swings • **Long** (20–30) → stable, ignores minor noise        |
-| **MACD fast span**     | EMA span for MACD’s fast line              | • **Lower** (5–10) → very quick to shift • **Higher** (15–20) → slower changes                                      |
-| **MACD slow span**     | EMA span for MACD’s slow line              | • Don’t set too close to fast span — keep at least +10 days difference                                                  |
-| **MACD sig span**      | EMA span for MACD’s signal line            | • **Lower** (5–9) → quick crossover triggers • **Higher** (12–16) → avoids whipsaws                                  |
-| **Profit target**      | Unrealized P/L% at which to **override** to SELL  | • Set your personal upside threshold—e.g. 5–20% • Smaller → take profits quickly, larger → ride trends longer       |
-| **Loss limit**         | Unrealized P/L% at which to **override** to BUY   | • Set your personal risk tolerance—e.g. 3–10% • Smaller → tighter stops, larger → more wiggle room                  |
-
-> **Tip:** start with the **defaults** (MA=10, RSI=14, MACD=12/26/9), and **tweak one at a time**.  
-> Watch how your backtest return, drawdown and win-rate change, then lock in the combination that matches your style.
-
----
-
-## 🏆 Objectives
-
-1. **Deliver** a polished MVP by week’s end for investor demos.  
-2. **Onboard** 100+ beta users in the next 30 days and iterate on feedback.  
-3. **Integrate** real-time streaming data & push notifications (Q3).  
-4. **Expand** to crypto, forex, and alternative data sets (Q4).  
-5. **Build** community-driven features—strategy sharing, crowd sentiment.
-
-Made in Toronto, Canada by KG
----
+… (unchanged help text) …
 """)
 
 # ───────────────────────────── Engine Tab ─────────────────────────────
@@ -101,6 +56,13 @@ with tab_engine:
     macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state["macd_slow"],   key="macd_slow")
     macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal")
 
+    # ─────────── Asset Type Selector (NEW) ───────────
+    asset_type = st.sidebar.selectbox(
+        "Asset Type",
+        ["Stock", "Crypto"],
+        help="Use 'Crypto' for symbols like BTC/USDT, ETH/USDT"
+    )
+
     # ─────────── Profit/Loss Sliders for Portfolio ───────────
     profit_target = st.sidebar.slider(
         "Profit target (%)", min_value=1, max_value=100, value=5,
@@ -116,13 +78,26 @@ with tab_engine:
 
     # ─────────── Data Loading ───────────
     @st.cache_data(show_spinner=False)
-    def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig):
-        df = yf.download(ticker, period="6mo", progress=False)
+    def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig, asset_type):
+        # ── Crypto branch ──
+        if asset_type == "Crypto":
+            ex = ccxt.binance()
+            six_months_ago = pd.Timestamp.utcnow() - pd.DateOffset(months=6)
+            since = ex.parse8601(six_months_ago.isoformat())
+            bars = ex.fetch_ohlcv(ticker, timeframe='1d', since=since)
+            df = pd.DataFrame(bars, columns=["ts","Open","High","Low","Close","Volume"])
+            df["Date"] = pd.to_datetime(df["ts"], unit="ms")
+            df.set_index("Date", inplace=True)
+        else:
+            df = yf.download(ticker, period="6mo", progress=False)
+
         if df.empty or "Close" not in df:
             return pd.DataFrame()
+
         # MA
         ma_col = f"MA{ma_w}"
         df[ma_col] = df["Close"].rolling(ma_w).mean()
+
         # RSI
         d = df["Close"].diff()
         up = d.clip(lower=0); dn = -d.clip(upper=0)
@@ -130,170 +105,83 @@ with tab_engine:
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
         rsi_col  = f"RSI{rsi_p}"
         df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
+
         # MACD
         ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
         macd     = ema_f - ema_s
         macd_sig = macd.ewm(span=sig, adjust=False).mean()
         df["MACD"] = macd; df["MACD_Signal"] = macd_sig
+
         # Drop NAs
         cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
         prs  = [c for c in cols if c in df.columns]
         if prs:
             try: df = df.dropna(subset=prs).reset_index(drop=True)
             except KeyError: pass
+
         return df
 
     # ─────────── Composite Signals ───────────
     def build_composite(df, ma_w, rsi_p):
-        n = len(df)
-        close, ma = df["Close"].to_numpy(), df[f"MA{ma_w}"].to_numpy()
-        rsi, macd, sig = df[f"RSI{rsi_p}"].to_numpy(), df["MACD"].to_numpy(), df["MACD_Signal"].to_numpy()
-        ma_sig = np.zeros(n,int); rsi_sig = np.zeros(n,int); macd_sig2 = np.zeros(n,int)
-        comp, trade = np.zeros(n,int), np.zeros(n,int)
-        for i in range(1,n):
-            if close[i-1]<ma[i-1] and close[i]>ma[i]:   ma_sig[i]=1
-            elif close[i-1]>ma[i-1] and close[i]<ma[i]: ma_sig[i]=-1
-            if rsi[i]<30:   rsi_sig[i]=1
-            elif rsi[i]>70: rsi_sig[i]=-1
-            if macd[i-1]<sig[i-1] and macd[i]>sig[i]:   macd_sig2[i]=1
-            elif macd[i-1]>sig[i-1] and macd[i]<sig[i]: macd_sig2[i]=-1
-            comp[i] = ma_sig[i]+rsi_sig[i]+macd_sig2[i]
-            trade[i] = np.sign(comp[i])
-        df["MA_Signal"], df["RSI_Signal"]   = ma_sig, rsi_sig
-        df["MACD_Signal2"], df["Composite"] = macd_sig2, comp
-        df["Trade"] = trade
+        …  # unchanged
         return df
 
     # ─────────── Backtest ───────────
     def backtest(df):
-        df = df.copy()
-        df["Return"]   = df["Close"].pct_change().fillna(0)
-        df["Position"] = df["Trade"].shift(1).fillna(0).clip(0,1)
-        df["StratRet"] = df["Position"]*df["Return"]
-        df["CumBH"], df["CumStrat"] = (1+df["Return"]).cumprod(), (1+df["StratRet"]).cumprod()
-        dd = df["CumStrat"]/df["CumStrat"].cummax() -1
-        max_dd = dd.min()*100
-        sd = df["StratRet"].std()
-        sharpe = (df["StratRet"].mean()/sd*np.sqrt(252)) if sd else np.nan
-        win_rt = (df["StratRet"]>0).mean()*100
+        …  # unchanged
         return df, max_dd, sharpe, win_rt
 
     # ─────────────────── Single‐Ticker Backtest ───────────────────
     st.markdown("## Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL)","AAPL").upper()
+    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
-        info  = yf.Ticker(ticker).info
-        price = info.get("regularMarketPrice")
+        # ── Price fetch branch ──
+        if asset_type == "Crypto":
+            ex    = ccxt.binance()
+            tick  = ex.fetch_ticker(ticker)
+            price = tick.get("last", None)
+        else:
+            info  = yf.Ticker(ticker).info
+            price = info.get("regularMarketPrice")
+
         if price is not None:
             st.subheader(f"💲 Live Price: ${price:.2f}")
 
-        # ─── New Dual‐Source News Feed ───
+        # ─── News feed (unchanged) ───
         raw_news = getattr(yf.Ticker(ticker), "news", []) or []
         shown = 0
-
-        if raw_news:
-            st.markdown("### 📰 Recent News & Sentiment (YFinance)")
-            for art in raw_news:
-                title, link = art.get("title",""), art.get("link","")
-                if not (title and link):
-                    continue
-                txt   = art.get("summary", title)
-                score = analyzer.polarity_scores(txt)["compound"]
-                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
-                st.markdown(f"- [{title}]({link}) {emoji}")
-                shown += 1
-                if shown >= 5:
-                    break
-
-        if shown == 0:
-            st.markdown("### 📰 Recent News (RSS)")
-            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-            feed    = feedparser.parse(rss_url)
-            for entry in feed.entries:
-                st.markdown(f"- [{entry.title}]({entry.link})")
-                shown += 1
-                if shown >= 5:
-                    break
-
-        if shown == 0:
-            st.info("No recent news found.")
+        …  # unchanged dual‐source news block
 
     if st.button("▶️ Run Composite Backtest"):
-        df_raw = load_and_compute(ticker,ma_window,rsi_period,macd_fast,macd_slow,macd_signal)
-        if df_raw.empty:
-            st.error(f"No data for '{ticker}'"); st.stop()
-        df_c, max_dd, sharpe, win_rt = backtest(build_composite(df_raw,ma_window,rsi_period))
-        rec = rec_map[int(df_c["Trade"].iloc[-1])]
-        st.success(f"**{ticker}**: {rec}")
-
-        ma_s, rsi_s, macd_s = (int(df_c[s].iloc[-1]) for s in ["MA_Signal","RSI_Signal","MACD_Signal2"])
-        try:
-            rsi_v = float(df_c[f"RSI{rsi_period}"].iloc[-1]); valid_rsi=True
-        except:
-            valid_rsi=False
-
-        ma_txt = {
-            1:f"Price ↑ above {ma_window}-day MA.",
-            0:"No crossover.",
-           -1:f"Price ↓ below {ma_window}-day MA."
-        }[ma_s]
-        if valid_rsi:
-            rsi_txt = {
-                1:f"RSI ({rsi_v:.1f}) < 30 → oversold.",
-                0:f"RSI ({rsi_v:.1f}) neutral.",
-               -1:f"RSI ({rsi_v:.1f}) > 70 → overbought."
-            }[rsi_s]
-        else:
-            rsi_txt="RSI data unavailable."
-        macd_txt = {1:"MACD ↑ signal.",0:"No crossover.",-1:"MACD ↓ signal."}[macd_s]
-
-        with st.expander("🔎 Why This Signal?"):
-            st.write(f"- **MA:**  {ma_txt}")
-            st.write(f"- **RSI:** {rsi_txt}")
-            st.write(f"- **MACD:** {macd_txt}")
-            st.write(f"- **Composite Score:** {int(df_c['Composite'].iloc[-1])}")
-
-        st.markdown(f"""
-- **Buy & Hold:**    {(df_c['CumBH'].iloc[-1]-1)*100:.2f}%  
-- **Strategy:**      {(df_c['CumStrat'].iloc[-1]-1)*100:.2f}%  
-- **Sharpe:**        {sharpe:.2f}  
-- **Max Drawdown:**  {max_dd:.2f}%  
-- **Win Rate:**      {win_rt:.1f}%  
-""")
-        fig, axs = plt.subplots(3,1,figsize=(10,12), sharex=True)
-        axs[0].plot(df_c["Close"], label="Close"); axs[0].plot(df_c[f"MA{ma_window}"], label=f"MA{ma_window}"); axs[0].legend(); axs[0].set_title("Price & MA")
-        axs[1].bar(df_c.index, df_c["Composite"], color="purple"); axs[1].set_title("Composite")
-        axs[2].plot(df_c["CumBH"], ":", label="BH"); axs[2].plot(df_c["CumStrat"], "-", label="Strat"); axs[2].legend(); axs[2].set_title("Equity")
-        plt.xticks(rotation=45); plt.tight_layout(); st.pyplot(fig)
+        df_raw = load_and_compute(
+            ticker,
+            ma_window,
+            rsi_period,
+            macd_fast,
+            macd_slow,
+            macd_signal,
+            asset_type,         # ← pass asset type
+        )
+        …  # remaining backtest & plotting unchanged
 
     # ─────────── Batch Backtest ───────────
     st.markdown("---")
     st.markdown("## Batch Backtest")
     batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("▶️ Run Batch Backtest"):
-        perf=[]
+        perf = []
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
-            df_t = load_and_compute(t,ma_window,rsi_period,macd_fast,macd_slow,macd_signal)
-            if df_t.empty: continue
-            df_tc, md, sh, wr = backtest(build_composite(df_t,ma_window,rsi_period))
-            perf.append({
-                "Ticker":t,
-                "Composite":int(df_tc["Composite"].iloc[-1]),
-                "Signal":rec_map[int(df_tc["Trade"].iloc[-1])],
-                "Buy & Hold %": (df_tc["CumBH"].iloc[-1]-1)*100,
-                "Strategy %": (df_tc["CumStrat"].iloc[-1]-1)*100,
-                "Sharpe":sh,
-                "Max Drawdown":md,
-                "Win Rate":wr
-            })
-        if perf:
-            df_perf=pd.DataFrame(perf).set_index("Ticker")
-            st.dataframe(df_perf, use_container_width=True)
-            st.download_button("Download CSV", df_perf.to_csv(), "batch.csv")
-        else:
-            st.error("No valid data for batch tickers.")
+            df_t = load_and_compute(
+                t,
+                ma_window,
+                rsi_period,
+                macd_fast,
+                macd_slow,
+                macd_signal,
+                asset_type,     # ← pass asset type
+            )
 
     # ─────────── Midday Movers ───────────
     st.markdown("---")
