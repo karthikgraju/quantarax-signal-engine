@@ -76,13 +76,19 @@ Made in Toronto, Canada by KG
 # ───────────────────────────── Engine Tab ─────────────────────────────
 with tab_engine:
 
-    # Defaults & Session State
-    DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9)
+    # ─────────── Defaults & Session State ───────────
+    DEFAULTS = dict(
+        ma_window=10,
+        rsi_period=14,
+        macd_fast=12,
+        macd_slow=26,
+        macd_signal=9
+    )
     for k, v in DEFAULTS.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Sidebar Controls
+    # ─────────── Sidebar Controls ───────────
     st.sidebar.header("Controls")
     if st.sidebar.button("🔄 Reset to defaults"):
         for k, v in DEFAULTS.items():
@@ -95,15 +101,22 @@ with tab_engine:
     macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state["macd_slow"],   key="macd_slow")
     macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal")
 
-    # Asset Type Selector
-    asset_type = st.sidebar.selectbox("Asset Type", ["Stock", "Crypto"],
-        help="Choose 'Crypto' to enter symbols like BTC/USDT or ETH/USD")
+    # ─────────── Asset Type Selector ───────────
+    asset_type = st.sidebar.selectbox(
+        "Asset Type",
+        ["Stock", "Crypto"],
+        help="Use 'Crypto' for symbols like BTC/USDT, ETH/USDT"
+    )
 
-    # Profit/Loss Sliders
-    profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 5,
-        help="If unrealized P/L% exceeds this → SELL")
-    loss_limit    = st.sidebar.slider("Loss limit (%)",    1, 100, 5,
-        help="If unrealized P/L% falls below –this → BUY")
+    # ─────────── Profit/Loss Sliders ───────────
+    profit_target = st.sidebar.slider(
+        "Profit target (%)", min_value=1, max_value=100, value=5,
+        help="If unrealized P/L% exceeds this → SELL"
+    )
+    loss_limit = st.sidebar.slider(
+        "Loss limit (%)", min_value=1, max_value=100, value=5,
+        help="If unrealized P/L% falls below –this → BUY"
+    )
 
     st.title("🚀 QuantaraX — Composite Signal Engine")
     st.write("MA + RSI + MACD Composite Signals & Backtest")
@@ -111,10 +124,11 @@ with tab_engine:
     # ─────────── Data Loading ───────────
     @st.cache_data(show_spinner=False)
     def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig, asset_type):
+        # Map "BTC/USDT" → "BTC-USD" etc.
         sym = ticker
-        if asset_type=="Crypto" and "/" in ticker:
+        if asset_type == "Crypto" and "/" in ticker:
             base, quote = ticker.split("/")
-            if quote.upper() in ("USDT","USD"):
+            if quote.upper() in ("USDT", "USD"):
                 sym = f"{base.upper()}-USD"
             else:
                 sym = f"{base.upper()}-{quote.upper()}"
@@ -129,7 +143,8 @@ with tab_engine:
 
         # RSI
         d = df["Close"].diff()
-        up, dn = d.clip(lower=0), -d.clip(upper=0)
+        up = d.clip(lower=0)
+        dn = -d.clip(upper=0)
         ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
         rsi_col  = f"RSI{rsi_p}"
@@ -140,31 +155,59 @@ with tab_engine:
         ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
         macd     = ema_f - ema_s
         macd_sig = macd.ewm(span=sig, adjust=False).mean()
-        df["MACD"], df["MACD_Signal"] = macd, macd_sig
+        df["MACD"] = macd
+        df["MACD_Signal"] = macd_sig
 
-        # Drop NAs
+        # ─── **Guarded dropna** ───
         cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
-        return df.dropna(subset=cols).reset_index(drop=True)
+        prs  = [c for c in cols if c in df.columns]
+        if prs:
+            try:
+                df = df.dropna(subset=prs).reset_index(drop=True)
+            except KeyError:
+                pass
+
+        return df
 
     # ─────────── Composite Signals ───────────
     def build_composite(df, ma_w, rsi_p):
         n = len(df)
         close, ma = df["Close"].to_numpy(), df[f"MA{ma_w}"].to_numpy()
-        rsi, macd, sig = df[f"RSI{rsi_p}"].to_numpy(), df["MACD"].to_numpy(), df["MACD_Signal"].to_numpy()
-        ma_sig = np.zeros(n,int); rsi_sig = np.zeros(n,int); macd_sig2 = np.zeros(n,int)
-        comp, trade = np.zeros(n,int), np.zeros(n,int)
-        for i in range(1,n):
-            if close[i-1]<ma[i-1] and close[i]>ma[i]:   ma_sig[i]=1
-            elif close[i-1]>ma[i-1] and close[i]<ma[i]: ma_sig[i]=-1
-            if rsi[i]<30:   rsi_sig[i]=1
-            elif rsi[i]>70: rsi_sig[i]=-1
-            if macd[i-1]<sig[i-1] and macd[i]>sig[i]:   macd_sig2[i]=1
-            elif macd[i-1]>sig[i-1] and macd[i]<sig[i]: macd_sig2[i]=-1
-            comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
+        rsi, macd, sig = (
+            df[f"RSI{rsi_p}"].to_numpy(),
+            df["MACD"].to_numpy(),
+            df["MACD_Signal"].to_numpy()
+        )
+        ma_sig = np.zeros(n, int)
+        rsi_sig = np.zeros(n, int)
+        macd_sig2 = np.zeros(n, int)
+        comp = np.zeros(n, int)
+        trade = np.zeros(n, int)
+
+        for i in range(1, n):
+            if close[i-1] < ma[i-1] and close[i] > ma[i]:
+                ma_sig[i] = 1
+            elif close[i-1] > ma[i-1] and close[i] < ma[i]:
+                ma_sig[i] = -1
+
+            if rsi[i] < 30:
+                rsi_sig[i] = 1
+            elif rsi[i] > 70:
+                rsi_sig[i] = -1
+
+            if macd[i-1] < sig[i-1] and macd[i] > sig[i]:
+                macd_sig2[i] = 1
+            elif macd[i-1] > sig[i-1] and macd[i] < sig[i]:
+                macd_sig2[i] = -1
+
+            comp[i] = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
             trade[i] = np.sign(comp[i])
-        df["MA_Signal"], df["RSI_Signal"]   = ma_sig, rsi_sig
-        df["MACD_Signal2"], df["Composite"] = macd_sig2, comp
-        df["Trade"] = trade
+
+        df["MA_Signal"]    = ma_sig
+        df["RSI_Signal"]   = rsi_sig
+        df["MACD_Signal2"] = macd_sig2
+        df["Composite"]    = comp
+        df["Trade"]        = trade
         return df
 
     # ─────────── Backtest ───────────
@@ -173,30 +216,30 @@ with tab_engine:
         df["Return"]   = df["Close"].pct_change().fillna(0)
         df["Position"] = df["Trade"].shift(1).fillna(0).clip(0,1)
         df["StratRet"] = df["Position"] * df["Return"]
-        df["CumBH"]    = (1+df["Return"]).cumprod()
-        df["CumStrat"] = (1+df["StratRet"]).cumprod()
-        dd = df["CumStrat"]/df["CumStrat"].cummax() - 1
-        max_dd   = dd.min()*100
-        sd       = df["StratRet"].std()
-        sharpe   = (df["StratRet"].mean()/sd*np.sqrt(252)) if sd else np.nan
-        win_rt   = (df["StratRet"]>0).mean()*100
+        df["CumBH"]    = (1 + df["Return"]).cumprod()
+        df["CumStrat"] = (1 + df["StratRet"]).cumprod()
+        dd            = df["CumStrat"] / df["CumStrat"].cummax() - 1
+        max_dd        = dd.min() * 100
+        sd            = df["StratRet"].std()
+        sharpe        = (df["StratRet"].mean() / sd * np.sqrt(252)) if sd else np.nan
+        win_rt        = (df["StratRet"] > 0).mean() * 100
         return df, max_dd, sharpe, win_rt
 
     # ─────────────────── Single‐Ticker Backtest ───────────────────
     st.markdown("## Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)","AAPL").upper()
+    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
-        # ─── Live Price via yfinance ───
-        sym = ticker.replace("/","-") if asset_type=="Crypto" else ticker
-        h = yf.download(sym, period="1d", progress=False)
+        # Fetch 1d history for live price
+        sym = ticker.replace("/", "-") if asset_type == "Crypto" else ticker
+        h   = yf.download(sym, period="1d", progress=False)
         if not h.empty and "Close" in h:
             price_val = h["Close"].iloc[-1]
-            # ←— **HERE’S THE ONLY CHANGE** —→
             try:
+                # ←— **TRY TO FORMAT AS FLOAT**, else raw
                 price_val = float(price_val)
                 st.subheader(f"💲 Live Price: ${price_val:.2f}")
-            except Exception:
+            except:
                 st.subheader(f"💲 Live Price: {price_val}")
 
         # ─── Dual‐Source News Feed ───
@@ -205,61 +248,75 @@ with tab_engine:
         if raw_news:
             st.markdown("### 📰 Recent News & Sentiment (YFinance)")
             for art in raw_news:
-                t, l = art.get("title",""), art.get("link","")
-                if not (t and l): continue
+                t = art.get("title", "")
+                l = art.get("link", "")
+                if not (t and l):
+                    continue
                 txt   = art.get("summary", t)
                 score = analyzer.polarity_scores(txt)["compound"]
-                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
+                emoji = "🔺" if score > 0.1 else ("🔻" if score < -0.1 else "➖")
                 st.markdown(f"- [{t}]({l}) {emoji}")
                 shown += 1
-                if shown >= 5: break
+                if shown >= 5:
+                    break
 
         if shown == 0:
             st.markdown("### 📰 Recent News (RSS)")
-            feed = feedparser.parse(
-                f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US"
+            rss_url = (
+                f"https://feeds.finance.yahoo.com/rss/2.0/headline?"
+                f"s={sym}&region=US&lang=en-US"
             )
+            feed = feedparser.parse(rss_url)
             for entry in feed.entries:
                 st.markdown(f"- [{entry.title}]({entry.link})")
                 shown += 1
-                if shown >= 5: break
+                if shown >= 5:
+                    break
 
         if shown == 0:
             st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(
-            ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, asset_type
+            ticker,
+            ma_window,
+            rsi_period,
+            macd_fast,
+            macd_slow,
+            macd_signal,
+            asset_type
         )
         if df_raw.empty:
-            st.error(f"No data for '{ticker}'"); st.stop()
+            st.error(f"No data for '{ticker}'")
+            st.stop()
+
         df_c, max_dd, sharpe, win_rt = backtest(build_composite(df_raw, ma_window, rsi_period))
         rec = rec_map[int(df_c["Trade"].iloc[-1])]
         st.success(f"**{ticker}**: {rec}")
 
         ma_s, rsi_s, macd_s = (
             int(df_c[s].iloc[-1])
-            for s in ["MA_Signal","RSI_Signal","MACD_Signal2"]
+            for s in ["MA_Signal", "RSI_Signal", "MACD_Signal2"]
         )
-        rsi_val = df_c[f"RSI{rsi_period}"].iloc[-1]
+        rsi_val   = df_c[f"RSI{rsi_period}"].iloc[-1]
         valid_rsi = not np.isnan(rsi_val)
 
         ma_txt = {
-            1:f"Price ↑ above {ma_window}-day MA.",
-            0:"No crossover.",
-           -1:f"Price ↓ below {ma_window}-day MA."
+            1: f"Price ↑ above {ma_window}-day MA.",
+            0: "No crossover.",
+           -1: f"Price ↓ below {ma_window}-day MA."
         }[ma_s]
 
         if valid_rsi:
             rsi_txt = {
-                1:f"RSI ({rsi_val:.1f}) < 30 → oversold.",
-                0:f"RSI ({rsi_val:.1f}) neutral.",
-               -1:f"RSI ({rsi_val:.1f}) > 70 → overbought."
+                1: f"RSI ({rsi_val:.1f}) < 30 → oversold.",
+                0: f"RSI ({rsi_val:.1f}) neutral.",
+               -1: f"RSI ({rsi_val:.1f}) > 70 → overbought."
             }[rsi_s]
         else:
             rsi_txt = "RSI data unavailable."
 
-        macd_txt = {1:"MACD ↑ signal.",0:"No crossover.",-1:"MACD ↓ signal."}[macd_s]
+        macd_txt = {1: "MACD ↑ signal.", 0: "No crossover.", -1: "MACD ↓ signal."}[macd_s]
 
         with st.expander("🔎 Why This Signal?"):
             st.write(f"- **MA:**  {ma_txt}")
