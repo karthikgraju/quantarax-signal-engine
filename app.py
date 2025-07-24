@@ -185,25 +185,31 @@ with tab_engine:
     if ticker:
         info  = yf.Ticker(ticker).info
         price = info.get("regularMarketPrice")
-        if price is not None:
-            st.subheader(f"💲 Live Price: ${price:.2f}")
-        news = getattr(yf.Ticker(ticker), "news", []) or []
-        if news:
-            st.markdown("### 📰 Recent News & Sentiment")
-            shown = 0
-            for art in news:
-                title, link = art.get("title",""), art.get("link","")
-                if not (title and link): continue
-                txt   = art.get("summary", title)
-                score = analyzer.polarity_scores(txt)["compound"]
-                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
-                st.markdown(f"- [{title}]({link}) {emoji}")
-                shown += 1
-                if shown >= 5: break
-            if shown == 0:
-                st.info("No recent news found.")
-        else:
+    if price is not None:
+        st.subheader(f"💲 Live Price: ${price:.2f}")
+
+    # ←─── THIS IS THE NEWS SECTION YOU’LL WANT TO MODIFY ───→
+    news = getattr(yf.Ticker(ticker), "news", []) or []
+    if news:
+        st.markdown("### 📰 Recent News & Sentiment")
+        shown = 0
+        for art in news:
+            title, link = art.get("title",""), art.get("link","")
+            if not (title and link): 
+                continue
+            txt   = art.get("summary", title)
+            score = analyzer.polarity_scores(txt)["compound"]
+            # you can adjust these thresholds and emojis:
+            emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
+            st.markdown(f"- [{title}]({link}) {emoji}")
+            shown += 1
+            # change 5 → 10 here if you want more articles
+            if shown >= 5: 
+                break
+        if shown == 0:
             st.info("No recent news found.")
+    else:
+        st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(ticker,ma_window,rsi_period,macd_fast,macd_slow,macd_signal)
