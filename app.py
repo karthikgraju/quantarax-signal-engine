@@ -70,7 +70,7 @@ Every slider trades off **responsiveness** vs. **smoothness**. Below are some qu
 5. **Build** community-driven features—strategy sharing, crowd sentiment.
 
 ---
-Made in Toronto, Canada by KG
+***Made in Toronto, Canada by KG
 ---
 """)
 
