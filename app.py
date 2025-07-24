@@ -106,23 +106,31 @@ with tab_engine:
         df = yf.download(ticker, period="6mo", progress=False)
         if df.empty or "Close" not in df:
             return pd.DataFrame()
+
         # MA
         df[f"MA{ma_w}"] = df["Close"].rolling(ma_w).mean()
+
         # RSI
         d       = df["Close"].diff()
         up, dn  = d.clip(lower=0), -d.clip(upper=0)
         ema_up  = up.ewm(com=rsi_p-1, adjust=False).mean()
         ema_dn  = dn.ewm(com=rsi_p-1, adjust=False).mean()
         df[f"RSI{rsi_p}"] = 100 - 100/(1 + ema_up/ema_dn)
+
         # MACD
         ema_f     = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s     = df["Close"].ewm(span=ms, adjust=False).mean()
         macd_line = ema_f - ema_s
         df["MACD"]        = macd_line
         df["MACD_Signal"] = macd_line.ewm(span=sig, adjust=False).mean()
-        # Drop NAs
+
+        # Only drop rows where *all* of our indicator columns exist but have NaNs
         cols = [f"MA{ma_w}", f"RSI{rsi_p}", "MACD", "MACD_Signal"]
-        return df.dropna(subset=cols).reset_index(drop=True)
+        valid = [c for c in cols if c in df.columns]
+        if valid:
+            df = df.dropna(subset=valid).reset_index(drop=True)
+
+        return df
 
     # ─────────── Composite Signals ───────────
     def build_composite(df, ma_w, rsi_p):
@@ -218,7 +226,7 @@ with tab_engine:
                 if shown >= 5:
                     break
             if shown == 0:
-                st.info("No recent news found via RSS.")
+                st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
@@ -365,10 +373,10 @@ with tab_engine:
             pnl      = val - invested
             pct      = (pnl / invested * 100) if invested else np.nan
             df_raw = load_and_compute(tkr, ma_window, rsi_period, macd_fast, macd_slow, macd_signal)
-            if df_raw.empty:
-                comp_sugg = "N/A"
-            else:
-                comp_sugg = rec_map[int(build_composite(df_raw, ma_window, rsi_period)["Trade"].iloc[-1])]
+            comp_sugg = (
+                rec_map[int(build_composite(df_raw, ma_window, rsi_period)["Trade"].iloc[-1])]
+                if not df_raw.empty else "N/A"
+            )
             if pct > profit_target:
                 sugg = "🔴 SELL"
             elif pct < -loss_limit:
@@ -405,8 +413,8 @@ with tab_engine:
     st.markdown("## 🛠️ Hyperparameter Optimization")
     ma_list  = st.sidebar.multiselect("MA windows",      [5,10,15,20,30], default=[ma_window], key="grid_ma")
     rsi_list = st.sidebar.multiselect("RSI lookbacks",   [7,14,21,28],   default=[rsi_period], key="grid_rsi")
-    mf_list  = st.sidebar.multiselect("MACD fast spans", [8,12,16,20],  default=[macd_fast], key="grid_mf")
-    ms_list  = st.sidebar.multiselect("MACD slow spans", [20,26,32,40], default=[macd_slow], key="grid_ms")
+    mf_list  = st.sidebar.multiselect("MACD fast spans", [8,12,16,20],  default=[macd_fast],  key="grid_mf")
+    ms_list  = st.sidebar.multiselect("MACD slow spans", [20,26,32,40], default=[macd_slow],  key="grid_ms")
     sig_list = st.sidebar.multiselect("MACD sig spans",  [5,9,12,16],   default=[macd_signal], key="grid_sig")
     if st.button("🏃‍♂️ Run Grid Search"):
         if not ticker:
