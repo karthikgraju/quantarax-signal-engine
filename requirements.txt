@@ -8,3 +8,4 @@ pytz
 vaderSentiment
 plotly>=5.0.0
 feedparser
+ccxt
