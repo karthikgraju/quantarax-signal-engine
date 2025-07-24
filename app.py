@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import feedparser  # ← added for RSS fallback
 
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals BETA v2", layout="centered")
@@ -69,7 +70,6 @@ Every slider trades off **responsiveness** vs. **smoothness**. Below are some qu
 5. **Build** community-driven features—strategy sharing, crowd sentiment.
 
 ---
-
 """)
 
 # ───────────────────────────── Engine Tab ─────────────────────────────
@@ -187,22 +187,36 @@ with tab_engine:
         price = info.get("regularMarketPrice")
         if price is not None:
             st.subheader(f"💲 Live Price: ${price:.2f}")
-        news = getattr(yf.Ticker(ticker), "news", []) or []
-        if news:
-            st.markdown("### 📰 Recent News & Sentiment")
-            shown = 0
-            for art in news:
+
+        # ─── New Dual‐Source News Feed ───
+        raw_news = getattr(yf.Ticker(ticker), "news", []) or []
+        shown = 0
+
+        if raw_news:
+            st.markdown("### 📰 Recent News & Sentiment (YFinance)")
+            for art in raw_news:
                 title, link = art.get("title",""), art.get("link","")
-                if not (title and link): continue
+                if not (title and link):
+                    continue
                 txt   = art.get("summary", title)
                 score = analyzer.polarity_scores(txt)["compound"]
                 emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
                 st.markdown(f"- [{title}]({link}) {emoji}")
                 shown += 1
-                if shown >= 5: break
-            if shown == 0:
-                st.info("No recent news found.")
-        else:
+                if shown >= 5:
+                    break
+
+        if shown == 0:
+            st.markdown("### 📰 Recent News (RSS Fallback)")
+            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+            feed    = feedparser.parse(rss_url)
+            for entry in feed.entries:
+                st.markdown(f"- [{entry.title}]({entry.link})")
+                shown += 1
+                if shown >= 5:
+                    break
+
+        if shown == 0:
             st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
