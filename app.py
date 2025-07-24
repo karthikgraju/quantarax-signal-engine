@@ -52,8 +52,8 @@ Every slider trades off **responsiveness** vs. **smoothness**. Below are some qu
 | **MACD fast span**     | EMA span for MACD’s fast line              | • **Lower** (5–10) → very quick to shift<br>• **Higher** (15–20) → slower changes                                      |
 | **MACD slow span**     | EMA span for MACD’s slow line              | • Don’t set too close to fast span — keep at least +10 days difference                                                  |
 | **MACD sig span**      | EMA span for MACD’s signal line            | • **Lower** (5–9) → quick crossover triggers • **Higher** (12–16) → avoids whipsaws                                  |
-| **Profit target**      | Unrealized P/L% at which to **override** to SELL  | • Set your personal upside threshold—e.g. 5–20%<br>• Smaller → take profits quickly, larger → ride trends longer       |
-| **Loss limit**         | Unrealized P/L% at which to **override** to BUY   | • Set your personal risk tolerance—e.g. 3–10%<br>• Smaller → tighter stops, larger → more wiggle room                  |
+| **Profit target**      | Unrealized P/L% at which to **override** to SELL  | • Set your personal upside threshold—e.g. 5–20% • Smaller → take profits quickly, larger → ride trends longer       |
+| **Loss limit**         | Unrealized P/L% at which to **override** to BUY   | • Set your personal risk tolerance—e.g. 3–10% • Smaller → tighter stops, larger → more wiggle room                  |
 
 > **Tip:** start with the **defaults** (MA=10, RSI=14, MACD=12/26/9), and **tweak one at a time**.  
 > Watch how your backtest return, drawdown and win-rate change, then lock in the combination that matches your style.
