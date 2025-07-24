@@ -295,13 +295,13 @@ with tab_engine:
             tk = yf.Ticker(sym)
 
             # Try 1-day intraday first
-            intraday = tk.history(period="1d", interval="5m", progress=False)
+            intraday = tk.history(period="1d", interval="5m")
 
             # Fallback: grab 2 days and then filter to today's date
             if intraday.empty:
-                intraday = tk.history(period="2d", interval="5m", progress=False)
+                intraday = tk.history(period="2d", interval="5m")
                 if not intraday.empty:
-                    today = pd.Timestamp.utcnow().normalize()  # UTC-normalized midnight
+                    today = pd.Timestamp.utcnow().normalize()
                     intraday = intraday[intraday.index >= today]
 
             if intraday.empty:
@@ -321,12 +321,8 @@ with tab_engine:
 
         if movers:
             df_m = pd.DataFrame(movers)
-
-            # Ensure numeric, drop any invalid
             df_m["Change %"] = pd.to_numeric(df_m["Change %"], errors="coerce")
             df_m = df_m.dropna(subset=["Change %"])
-
-            # Sort and display
             df_m = df_m.set_index("Ticker").sort_values("Change %", ascending=False)
             st.dataframe(df_m, use_container_width=True)
         else:
