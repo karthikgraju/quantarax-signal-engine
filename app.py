@@ -205,7 +205,7 @@ with tab_engine:
 
     # ─────────────────── Single‐Ticker Backtest ───────────────────
     st.markdown("## Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)","AAPL").upper()
+    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
         # ── Price fetch branch ──
