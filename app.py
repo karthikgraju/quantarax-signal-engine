@@ -4,8 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import feedparser  # ← added for RSS fallback
-import ccxt        # ← added for crypto data
+import feedparser  # ← for RSS fallback
 
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals BETA v2", layout="centered")
@@ -106,10 +105,10 @@ with tab_engine:
     asset_type = st.sidebar.selectbox(
         "Asset Type",
         ["Stock", "Crypto"],
-        help="Use 'Crypto' for symbols like BTC/USDT, ETH/USDT"
+        help="Use 'Crypto' for symbols like BTC/USDT, ETH/USD"
     )
 
-    # ─────────── Profit/Loss Sliders for Portfolio ───────────
+    # ─────────── Profit/Loss Sliders ───────────
     profit_target = st.sidebar.slider(
         "Profit target (%)", min_value=1, max_value=100, value=5,
         help="If unrealized P/L% exceeds this → SELL"
@@ -125,25 +124,23 @@ with tab_engine:
     # ─────────── Data Loading ───────────
     @st.cache_data(show_spinner=False)
     def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig, asset_type):
-        # ── Crypto branch ──
-        if asset_type == "Crypto":
-            ex = ccxt.binance()
-            six_months_ago = pd.Timestamp.utcnow() - pd.DateOffset(months=6)
-            since = ex.parse8601(six_months_ago.isoformat())
-            bars = ex.fetch_ohlcv(ticker, timeframe='1d', since=since)
-            df = pd.DataFrame(bars, columns=["ts","Open","High","Low","Close","Volume"])
-            df["Date"] = pd.to_datetime(df["ts"], unit="ms")
-            df.set_index("Date", inplace=True)
+        # If crypto, convert “BTC/USDT” → “BTC-USD”
+        if asset_type == "Crypto" and "/" in ticker:
+            base, quote = ticker.split("/")
+            if quote.upper() in ("USDT", "USD"):
+                yf_symbol = f"{base.upper()}-USD"
+            else:
+                yf_symbol = f"{base.upper()}-{quote.upper()}"
         else:
-            df = yf.download(ticker, period="6mo", progress=False)
+            yf_symbol = ticker
 
+        df = yf.download(yf_symbol, period="6mo", progress=False)
         if df.empty or "Close" not in df:
             return pd.DataFrame()
 
         # MA
         ma_col = f"MA{ma_w}"
         df[ma_col] = df["Close"].rolling(ma_w).mean()
-
         # RSI
         d = df["Close"].diff()
         up = d.clip(lower=0); dn = -d.clip(upper=0)
@@ -151,20 +148,18 @@ with tab_engine:
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
         rsi_col  = f"RSI{rsi_p}"
         df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
-
         # MACD
         ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
         macd     = ema_f - ema_s
         macd_sig = macd.ewm(span=sig, adjust=False).mean()
         df["MACD"] = macd; df["MACD_Signal"] = macd_sig
-
         # Drop NAs
         cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
-        prs  = [c for c in cols if c in df.columns]
-        if prs:
-            try: df = df.dropna(subset=prs).reset_index(drop=True)
-            except KeyError: pass
+        try:
+            df = df.dropna(subset=cols).reset_index(drop=True)
+        except KeyError:
+            pass
 
         return df
 
@@ -208,62 +203,51 @@ with tab_engine:
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
-        # ── Price fetch branch ──
-        if asset_type == "Crypto":
-            ex    = ccxt.binance()
-            tick  = ex.fetch_ticker(ticker)
-            price = tick.get("last", None)
-        else:
-            # ← wrapped in try/except to avoid YFException
-            try:
-                info  = yf.Ticker(ticker).info
-                price = info.get("regularMarketPrice", None)
-            except Exception:
-                hist = yf.download(ticker, period="1d", progress=False)
-                price = hist["Close"].iloc[-1] if not hist.empty else None
-
+        # Fetch live price
+        yf_symbol = ticker
+        if asset_type == "Crypto" and "/" in ticker:
+            base, quote = ticker.split("/")
+            if quote.upper() in ("USDT","USD"):
+                yf_symbol = f"{base}-USD"
+            else:
+                yf_symbol = f"{base}-{quote}"
+        hist = yf.download(yf_symbol, period="1d", progress=False)
+        price = hist["Close"].iloc[-1] if not hist.empty else None
         if price is not None:
             st.subheader(f"💲 Live Price: ${price:.2f}")
 
-        # ─── New Dual‐Source News Feed ───
-        raw_news = getattr(yf.Ticker(ticker), "news", []) or []
+        # ─── Dual‐Source News Feed ───
+        raw_news = getattr(yf.Ticker(yf_symbol), "news", []) or []
         shown = 0
 
         if raw_news:
             st.markdown("### 📰 Recent News & Sentiment (YFinance)")
             for art in raw_news:
                 title, link = art.get("title",""), art.get("link","")
-                if not (title and link):
-                    continue
+                if not (title and link): continue
                 txt   = art.get("summary", title)
                 score = analyzer.polarity_scores(txt)["compound"]
                 emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
                 st.markdown(f"- [{title}]({link}) {emoji}")
                 shown += 1
-                if shown >= 5:
-                    break
+                if shown >= 5: break
 
         if shown == 0:
             st.markdown("### 📰 Recent News (RSS)")
-            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={yf_symbol}&region=US&lang=en-US"
             feed    = feedparser.parse(rss_url)
             for entry in feed.entries:
                 st.markdown(f"- [{entry.title}]({entry.link})")
                 shown += 1
-                if shown >= 5:
-                    break
+                if shown >= 5: break
 
         if shown == 0:
             st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
         df_raw = load_and_compute(
-            ticker,
-            ma_window,
-            rsi_period,
-            macd_fast,
-            macd_slow,
-            macd_signal,
+            ticker, ma_window, rsi_period,
+            macd_fast, macd_slow, macd_signal,
             asset_type
         )
         if df_raw.empty:
@@ -274,7 +258,7 @@ with tab_engine:
 
         ma_s, rsi_s, macd_s = (
             int(df_c[s].iloc[-1])
-            for s in ["MA_Signal", "RSI_Signal", "MACD_Signal2"]
+            for s in ["MA_Signal","RSI_Signal","MACD_Signal2"]
         )
         try:
             rsi_v = float(df_c[f"RSI{rsi_period}"].iloc[-1])
