@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import feedparser
 
 # ───────────────────────────── Page Setup ─────────────────────────────
 st.set_page_config(page_title="QuantaraX Composite Signals BETA v2", layout="centered")
