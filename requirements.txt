@@ -4,5 +4,6 @@ pandas
 numpy
 matplotlib
 nltk
+pytz
 vaderSentiment
 plotly>=5.0.0
