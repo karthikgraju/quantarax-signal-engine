@@ -397,19 +397,19 @@ with tab_engine:
         else:
             st.error("No valid data for batch tickers.")
 
-# ─────────── Midday Movers ───────────
-st.markdown("---")
-st.markdown("## 🌗 Midday Movers")
-st.info("Enter comma-separated tickers to see today’s % change from open.")
+    # ─────────── Midday Movers ───────────
+        st.markdown("---")
+        st.markdown("## 🌗 Midday Movers")
+        st.info("Enter comma-separated tickers to see today’s % change from open.")
 
-mid_tickers = st.text_input("Tickers (e.g. AAPL, MSFT, TSLA)", "AAPL, MSFT, TSLA").upper()
-if st.button("🔍 Get Midday Movers"):
-    tickers = [t.strip() for t in mid_tickers.split(",") if t.strip()]
-    movers  = []
-    for t in tickers:
-        # grab today’s 5-minute bars
-        hist = yf.download(t, period="1d", interval="5m", progress=False)
-        if hist.empty:
+        mid_tickers = st.text_input("Tickers (e.g. AAPL, MSFT, TSLA)", "AAPL, MSFT, TSLA").upper()
+        if st.button("🔍 Get Midday Movers"):
+        tickers = [t.strip() for t in mid_tickers.split(",") if t.strip()]
+        movers  = []
+        for t in tickers:
+            # grab today’s 5-minute bars
+            hist = yf.download(t, period="1d", interval="5m", progress=False)
+            if hist.empty:
             continue
         open_price    = hist["Open"].iloc[0]
         current_price = hist["Close"].iloc[-1]
@@ -421,11 +421,11 @@ if st.button("🔍 Get Midday Movers"):
             "Change %":    change_pct
         })
 
-    if movers:
+        if movers:
         df_movers = pd.DataFrame(movers).set_index("Ticker")
         df_movers = df_movers.sort_values("Change %", ascending=False)
         st.dataframe(df_movers, use_container_width=True)
-    else:
+        else:
         st.warning("No data available for those tickers.")
 
 
