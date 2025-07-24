@@ -76,19 +76,13 @@ Made in Toronto, Canada by KG
 # ───────────────────────────── Engine Tab ─────────────────────────────
 with tab_engine:
 
-    # ─────────── Defaults & Session State ───────────
-    DEFAULTS = dict(
-        ma_window=10,
-        rsi_period=14,
-        macd_fast=12,
-        macd_slow=26,
-        macd_signal=9
-    )
+    # Defaults & Session State
+    DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9)
     for k, v in DEFAULTS.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # ─────────── Sidebar Controls ───────────
+    # Sidebar Controls
     st.sidebar.header("Controls")
     if st.sidebar.button("🔄 Reset to defaults"):
         for k, v in DEFAULTS.items():
@@ -101,22 +95,15 @@ with tab_engine:
     macd_slow   = st.sidebar.slider("MACD slow span",20, 40, st.session_state["macd_slow"],   key="macd_slow")
     macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal")
 
-    # ─────────── **NEW** Asset Type Selector ───────────
-    asset_type = st.sidebar.selectbox(
-        "Asset Type",
-        ["Stock", "Crypto"],
-        help="Choose 'Crypto' to enter symbols like BTC/USDT or ETH/USD"
-    )
+    # Asset Type Selector
+    asset_type = st.sidebar.selectbox("Asset Type", ["Stock", "Crypto"],
+        help="Choose 'Crypto' to enter symbols like BTC/USDT or ETH/USD")
 
-    # ─────────── Profit/Loss Sliders ───────────
-    profit_target = st.sidebar.slider(
-        "Profit target (%)", min_value=1, max_value=100, value=5,
-        help="If unrealized P/L% exceeds this → SELL"
-    )
-    loss_limit = st.sidebar.slider(
-        "Loss limit (%)", min_value=1, max_value=100, value=5,
-        help="If unrealized P/L% falls below –this → BUY"
-    )
+    # Profit/Loss Sliders
+    profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 5,
+        help="If unrealized P/L% exceeds this → SELL")
+    loss_limit    = st.sidebar.slider("Loss limit (%)",    1, 100, 5,
+        help="If unrealized P/L% falls below –this → BUY")
 
     st.title("🚀 QuantaraX — Composite Signal Engine")
     st.write("MA + RSI + MACD Composite Signals & Backtest")
@@ -124,35 +111,37 @@ with tab_engine:
     # ─────────── Data Loading ───────────
     @st.cache_data(show_spinner=False)
     def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig, asset_type):
-        # Convert crypto ticker for yfinance
-        yf_sym = ticker
-        if asset_type == "Crypto" and "/" in ticker:
+        sym = ticker
+        if asset_type=="Crypto" and "/" in ticker:
             base, quote = ticker.split("/")
             if quote.upper() in ("USDT","USD"):
-                yf_sym = f"{base.upper()}-USD"
+                sym = f"{base.upper()}-USD"
             else:
-                yf_sym = f"{base.upper()}-{quote.upper()}"
+                sym = f"{base.upper()}-{quote.upper()}"
 
-        df = yf.download(yf_sym, period="6mo", progress=False)
+        df = yf.download(sym, period="6mo", progress=False)
         if df.empty or "Close" not in df:
             return pd.DataFrame()
 
         # MA
         ma_col = f"MA{ma_w}"
         df[ma_col] = df["Close"].rolling(ma_w).mean()
+
         # RSI
         d = df["Close"].diff()
-        up = d.clip(lower=0); dn = -d.clip(upper=0)
+        up, dn = d.clip(lower=0), -d.clip(upper=0)
         ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
         rsi_col  = f"RSI{rsi_p}"
         df[rsi_col] = 100 - 100/(1 + ema_up/ema_down)
+
         # MACD
         ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
         ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
         macd     = ema_f - ema_s
         macd_sig = macd.ewm(span=sig, adjust=False).mean()
-        df["MACD"] = macd; df["MACD_Signal"] = macd_sig
+        df["MACD"], df["MACD_Signal"] = macd, macd_sig
+
         # Drop NAs
         cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
         return df.dropna(subset=cols).reset_index(drop=True)
@@ -171,7 +160,7 @@ with tab_engine:
             elif rsi[i]>70: rsi_sig[i]=-1
             if macd[i-1]<sig[i-1] and macd[i]>sig[i]:   macd_sig2[i]=1
             elif macd[i-1]>sig[i-1] and macd[i]<sig[i]: macd_sig2[i]=-1
-            comp[i]  = ma_sig[i]+rsi_sig[i]+macd_sig2[i]
+            comp[i]  = ma_sig[i] + rsi_sig[i] + macd_sig2[i]
             trade[i] = np.sign(comp[i])
         df["MA_Signal"], df["RSI_Signal"]   = ma_sig, rsi_sig
         df["MACD_Signal2"], df["Composite"] = macd_sig2, comp
@@ -195,14 +184,20 @@ with tab_engine:
 
     # ─────────────────── Single‐Ticker Backtest ───────────────────
     st.markdown("## Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
+    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)","AAPL").upper()
 
     if ticker:
-        # Live price via yfinance
+        # ─── Live Price via yfinance ───
         sym = ticker.replace("/","-") if asset_type=="Crypto" else ticker
         h = yf.download(sym, period="1d", progress=False)
-        if not h.empty:
-            st.subheader(f"💲 Live Price: ${h['Close'].iloc[-1]:.2f}")
+        if not h.empty and "Close" in h:
+            price_val = h["Close"].iloc[-1]
+            # ←— **HERE’S THE ONLY CHANGE** —→
+            try:
+                price_val = float(price_val)
+                st.subheader(f"💲 Live Price: ${price_val:.2f}")
+            except Exception:
+                st.subheader(f"💲 Live Price: {price_val}")
 
         # ─── Dual‐Source News Feed ───
         raw_news = getattr(yf.Ticker(sym), "news", []) or []
@@ -243,7 +238,7 @@ with tab_engine:
         st.success(f"**{ticker}**: {rec}")
 
         ma_s, rsi_s, macd_s = (
-            int(df_c[s].iloc[-1]) 
+            int(df_c[s].iloc[-1])
             for s in ["MA_Signal","RSI_Signal","MACD_Signal2"]
         )
         rsi_val = df_c[f"RSI{rsi_period}"].iloc[-1]
@@ -262,7 +257,7 @@ with tab_engine:
                -1:f"RSI ({rsi_val:.1f}) > 70 → overbought."
             }[rsi_s]
         else:
-            rsi_txt="RSI data unavailable."
+            rsi_txt = "RSI data unavailable."
 
         macd_txt = {1:"MACD ↑ signal.",0:"No crossover.",-1:"MACD ↓ signal."}[macd_s]
 
