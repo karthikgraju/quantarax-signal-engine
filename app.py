@@ -214,8 +214,13 @@ with tab_engine:
             tick  = ex.fetch_ticker(ticker)
             price = tick.get("last", None)
         else:
-            info  = yf.Ticker(ticker).info
-            price = info.get("regularMarketPrice")
+            # ← wrapped in try/except to avoid YFException
+            try:
+                info  = yf.Ticker(ticker).info
+                price = info.get("regularMarketPrice", None)
+            except Exception:
+                hist = yf.download(ticker, period="1d", progress=False)
+                price = hist["Close"].iloc[-1] if not hist.empty else None
 
         if price is not None:
             st.subheader(f"💲 Live Price: ${price:.2f}")
