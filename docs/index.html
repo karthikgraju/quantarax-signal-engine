@@ -1,10 +1,45 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>QuantaraX PWA Test</title>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>QuantaraX Composite Signals BETA v2</title>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Icons -->
+  <link rel="icon" type="image/png" sizes="192x192" href="logo-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="logo-512.png" />
+
+  <!-- Theme color for address bar / splash screen -->
+  <meta name="theme-color" content="#4B5563" />
+
 </head>
 <body>
-  <h1>If you see this, Pages is working!</h1>
+  <!-- Fallback content if JS is disabled -->
+  <noscript>
+    <strong>JavaScript is required to run this app. Please enable JS in your browser.</strong>
+  </noscript>
+
+  <!-- Optionally, your app’s root element goes here -->
+  <div id="app">
+    <h1>QuantaraX Composite Signals</h1>
+    <p>If you see this, your index.html loaded correctly.</p>
+  </div>
+
+  <!-- Register service worker after the page has loaded -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker
+          .register('service-worker.js')
+          .then(reg => console.log('Service Worker registered:', reg))
+          .catch(err => console.error('Service Worker registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>
