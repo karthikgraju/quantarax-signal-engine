@@ -283,6 +283,7 @@ with tab_engine:
     # ─────────── Midday Movers ───────────
     st.markdown("---")
     st.markdown("## 🌤️ Midday Movers (Intraday % Change)")
+
     mover_list = st.text_area(
         "Tickers to monitor (comma-separated)",
         "AAPL, MSFT, TSLA, SPY, QQQ"
@@ -291,14 +292,25 @@ with tab_engine:
     if st.button("🔄 Get Midday Movers"):
         movers = []
         for sym in [s.strip() for s in mover_list.split(",") if s.strip()]:
-            # 1. Download today's 5-minute bars
-            intraday = yf.download(sym, period="1d", interval="5m", progress=False)
+            tk = yf.Ticker(sym)
+
+            # Try 1-day intraday first
+            intraday = tk.history(period="1d", interval="5m", progress=False)
+
+            # Fallback: grab 2 days and then filter to today's date
             if intraday.empty:
+                intraday = tk.history(period="2d", interval="5m", progress=False)
+                if not intraday.empty:
+                    today = pd.Timestamp.utcnow().normalize()  # UTC-normalized midnight
+                    intraday = intraday[intraday.index >= today]
+
+            if intraday.empty:
+                st.warning(f"No intraday data for {sym}. (Market closed or too early!)")
                 continue
 
             open_price = intraday["Open"].iloc[0]
             last_price = intraday["Close"].iloc[-1]
-            change_pct  = (last_price - open_price) / open_price * 100
+            change_pct = (last_price - open_price) / open_price * 100
 
             movers.append({
                 "Ticker":   sym,
@@ -310,16 +322,12 @@ with tab_engine:
         if movers:
             df_m = pd.DataFrame(movers)
 
-            # ensure numeric and drop any invalid rows
+            # Ensure numeric, drop any invalid
             df_m["Change %"] = pd.to_numeric(df_m["Change %"], errors="coerce")
             df_m = df_m.dropna(subset=["Change %"])
 
-            # set index and sort
-            df_m = (
-                df_m
-                .set_index("Ticker")
-                .sort_values("Change %", ascending=False)
-            )
+            # Sort and display
+            df_m = df_m.set_index("Ticker").sort_values("Change %", ascending=False)
             st.dataframe(df_m, use_container_width=True)
         else:
             st.info("No valid intraday data found for those tickers.")
