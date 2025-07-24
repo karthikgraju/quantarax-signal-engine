@@ -2,40 +2,32 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, shrink-to-fit=no"
-  />
-  <title>QuantaraX Composite Signals</title>
-
-  <!-- PWA manifest & theme color -->
-  <link rel="manifest" href="./manifest.json" />
-  <meta name="theme-color" content="#4B5563" />
-
-  <!-- Icons -->
-  <link rel="icon" type="image/png" sizes="192x192" href="./logo-192.png" />
-  <link rel="icon" type="image/png" sizes="512x512" href="./logo-512.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QuantaraX PWA Shell</title>
+  <link rel="icon" href="logo-192.png" />
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    body { 
+      font-family: sans-serif; 
+      height:100vh; display:flex; align-items:center; justify-content:center;
+      margin:0; background:#f5f5f5;
+    }
+    #root { text-align:center; }
+  </style>
 </head>
-
 <body>
-  <main style="text-align:center; padding:2rem;">
-    <h1>QuantaraX Composite Signals</h1>
-    <p>
-      This is the Progressive Web App shell for QuantaraX.  
-      <a href="https://your-streamlit-app-url/">Launch the live app →</a>
-    </p>
-    <small>(Offline support courtesy of your service worker.)</small>
-  </main>
+  <div id="root">
+    <h1>✅ PWA Shell Loaded</h1>
+    <p>If you see this, your `index.html` is being served correctly.</p>
+  </div>
 
-  <!-- register the SW -->
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
-        .register('/service-worker.js')
-        .then(() => console.log('Service Worker registered'))
-        .catch(err => console.error('SW registration failed:', err));
+        .register('service-worker.js')
+        .then(() => console.log('SW registered'))
+        .catch(err => console.error('SW failed:', err));
     }
   </script>
 </body>
 </html>
- 
