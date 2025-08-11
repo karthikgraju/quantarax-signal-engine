@@ -1,3 +1,10 @@
+# app.py — QuantaraX Composite Signals BETA v3+
+# -------------------------------------------------------------
+# pip install: streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment
+
+import math
+from typing import List, Tuple, Dict
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -7,11 +14,11 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import feedparser
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Composite Signals BETA v2+", layout="wide")
+st.set_page_config(page_title="QuantaraX Composite Signals BETA v3+", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 
 # ───────────────────────────── Mappings ─────────────────────────────
-rec_map = { 1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL" }
+rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
 # ───────────────────────────── Tabs ─────────────────────────────
 tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
@@ -20,18 +27,16 @@ tab_engine, tab_help = st.tabs(["🚀 Engine", "❓ How It Works"])
 with tab_help:
     st.header("How QuantaraX Works")
     st.markdown(r"""
-Welcome to **QuantaraX** — now with **weighted composites**, **ATR risk controls**, **shorting + trading costs**, and **interval/period** controls.
+Welcome to **QuantaraX** — now with **weighted composites**, **ATR risk controls**, **shorting + trading costs**, **interval/period** controls, **multi-timeframe confirmation**, **walk-forward optimization**, and a **risk-parity** portfolio allocator.
 
-**What’s new vs your last build**
-- Weighted composite: MA/RSI/MACD (+ optional Bollinger Bands) with per-indicator weights and a trigger threshold.
-- Risk overlay: ATR stop/target multiples and **trading costs (bps)** included in backtests.
-- Shorting: optional, with correct PnL math.
-- More controls: choose **period** (6mo/1y/2y/5y) and **interval** (1d/1h).
-- Richer metrics: CAGR, Sharpe, Max Drawdown, Win Rate, Trades, Time-in-Market.
-- Stronger data handling, caching and crypto pair mapping (`BTC/USDT` → `BTC-USD`).
+### Quick guide
+- **Composite (v2+)**: MA, RSI, MACD (+ optional Bollinger) → weighted sum. Enter when composite ≥ threshold (and ≤ −threshold for shorts).
+- **Risk overlay**: ATR stop/target, trading costs (bps), optional volatility targeting.
+- **Walk-forward**: grid search on rolling in-sample, stitch out-of-sample equity.
+- **MTF**: compare Daily vs Hourly composite direction.
+- **Risk parity**: equalize risk contributions across tickers.
 
-Made in Toronto, Canada by KG
----
+> Use the sidebar to tweak indicators, weights, risk, and data period/interval.
 """)
 
 # ───────────────────────────── Engine Tab ─────────────────────────────
@@ -58,7 +63,7 @@ with tab_engine:
 
     st.sidebar.subheader("Composite v2 (advanced)")
     use_weighted = st.sidebar.toggle("Use weighted composite", value=True)
-    include_bb   = st.sidebar.toggle("Include Bollinger Bands in composite", value=True)
+    include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True)
     w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, 1.0, 0.1)
     w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, 1.0, 0.1)
     w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, 1.0, 0.1)
@@ -70,19 +75,17 @@ with tab_engine:
     cost_bps    = st.sidebar.slider("Trading cost (bps/side)", 0.0, 25.0, 5.0, 0.5)
     sl_atr_mult = st.sidebar.slider("Stop • ATR ×", 0.0, 5.0, 2.0, 0.1)
     tp_atr_mult = st.sidebar.slider("Target • ATR ×", 0.0, 8.0, 3.0, 0.1)
+    vol_target  = st.sidebar.slider("Vol targeting (annual, e.g. 0.00–0.50)", 0.0, 0.5, 0.0, 0.05)
 
     st.sidebar.subheader("Data")
     period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1)
     interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0)
 
-    # ─────────── Profit/Loss Sliders for Portfolio ───────────
     st.sidebar.subheader("Portfolio Guardrails")
-    profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10,
-                                      help="If unrealized P/L% exceeds this → SELL")
-    loss_limit    = st.sidebar.slider("Loss limit (%)", 1, 100, 5,
-                                      help="If unrealized P/L% falls below –this → BUY")
+    profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, help="If unrealized P/L% exceeds this → SELL")
+    loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5,  help="If unrealized P/L% falls below –this → BUY")
 
-    st.title("🚀 QuantaraX — Composite Signal Engine (v2+)")
+    st.title("🚀 QuantaraX — Composite Signal Engine (v3+)")
 
     # ─────────── Helpers ───────────
     def _map_symbol(sym: str) -> str:
@@ -94,163 +97,141 @@ with tab_engine:
         return s
 
     @st.cache_data(show_spinner=False, ttl=900)
-    def load_and_compute(ticker, ma_w, rsi_p, mf, ms, sig, period, interval, include_bb):
-        sym = _map_symbol(ticker)
+    def load_prices(symbol: str, period: str, interval: str) -> pd.DataFrame:
+        sym = _map_symbol(symbol)
         df = yf.download(sym, period=period, interval=interval, auto_adjust=False, progress=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] for c in df.columns]
-        if df.empty or "Close" not in df:
-            return pd.DataFrame()
+        return df.dropna()
 
+    def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int, sig: int,
+                           use_bb: bool = True) -> pd.DataFrame:
+        d = df.copy()
         # MA
-        ma_col = f"MA{ma_w}"
-        df[ma_col] = df["Close"].rolling(ma_w).mean()
-
+        d[f"MA{ma_w}"] = d["Close"].rolling(ma_w).mean()
         # RSI
-        d = df["Close"].diff()
-        up = d.clip(lower=0); dn = -d.clip(upper=0)
+        chg = d["Close"].diff()
+        up, dn = chg.clip(lower=0), -chg.clip(upper=0)
         ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
         ema_down = dn.ewm(com=rsi_p-1, adjust=False).mean()
-        rsi_col  = f"RSI{rsi_p}"
         rs = ema_up / ema_down.replace(0, np.nan)
-        df[rsi_col] = 100 - 100/(1 + rs)
-
+        d[f"RSI{rsi_p}"] = 100 - 100 / (1 + rs)
         # MACD
-        ema_f    = df["Close"].ewm(span=mf, adjust=False).mean()
-        ema_s    = df["Close"].ewm(span=ms, adjust=False).mean()
-        macd     = ema_f - ema_s
-        macd_sig = macd.ewm(span=sig, adjust=False).mean()
-        df["MACD"] = macd; df["MACD_Signal"] = macd_sig
+        ema_f = d["Close"].ewm(span=mf, adjust=False).mean()
+        ema_s = d["Close"].ewm(span=ms, adjust=False).mean()
+        macd_line = ema_f - ema_s
+        d["MACD"] = macd_line
+        d["MACD_Signal"] = macd_line.ewm(span=sig, adjust=False).mean()
+        # ATR
+        pc = d["Close"].shift(1)
+        tr = pd.concat([(d["High"]-d["Low"]).abs(), (d["High"]-pc).abs(), (d["Low"]-pc).abs()], axis=1).max(axis=1)
+        d["ATR"] = tr.ewm(alpha=1/14, adjust=False).mean()
+        # Bollinger
+        if use_bb:
+            w = 20; k = 2.0
+            mid = d["Close"].rolling(w).mean()
+            sd  = d["Close"].rolling(w).std(ddof=0)
+            d["BB_M"], d["BB_U"], d["BB_L"] = mid, mid + k*sd, mid - k*sd
+        return d.dropna()
 
-        # ATR (for risk)
-        prev_close = df["Close"].shift(1)
-        tr = pd.concat([(df["High"]-df["Low"]).abs(),
-                        (df["High"]-prev_close).abs(),
-                        (df["Low"]-prev_close).abs()], axis=1).max(axis=1)
-        df["ATR"] = tr.ewm(alpha=1/14, adjust=False).mean()
+    def build_composite(df: pd.DataFrame, ma_w: int, rsi_p: int,
+                        *, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                        include_bb=True, threshold=0.0, allow_short=False) -> pd.DataFrame:
+        d = df.copy()
+        n = len(d)
+        close = d["Close"].to_numpy()
+        ma    = d[f"MA{ma_w}"].to_numpy()
+        rsi   = d[f"RSI{rsi_p}"].to_numpy()
+        macd  = d["MACD"].to_numpy()
+        sigl  = d["MACD_Signal"].to_numpy()
 
-        # Bollinger Bands (optional)
-        if include_bb:
-            bb_w = 20; bb_k = 2.0
-            m = df["Close"].rolling(bb_w).mean()
-            sd = df["Close"].rolling(bb_w).std(ddof=0)
-            df["BB_M"], df["BB_U"], df["BB_L"] = m, m + bb_k*sd, m - bb_k*sd
-
-        # Drop NAs
-        cols = [ma_col, rsi_col, "MACD", "MACD_Signal"]
-        if include_bb: cols += ["BB_M","BB_U","BB_L"]
-        df = df.dropna(subset=[c for c in cols if c in df.columns]).reset_index(drop=False)
-        return df
-
-    # ─────────── Composite Signals ───────────
-    def build_composite(df, ma_w, rsi_p, *,
-                        use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.0,
-                        include_bb=False, threshold=0.0, allow_short=False):
-        df = df.copy()
-        n = len(df)
-        close, ma = df["Close"].to_numpy(), df[f"MA{ma_w}"].to_numpy()
-        rsi = df[f"RSI{rsi_p}"].to_numpy()
-        macd = df["MACD"].to_numpy()
-        sigl = df["MACD_Signal"].to_numpy()
-
-        # Classic discrete components (match your original semantics)
-        ma_sig   = np.zeros(n, int)
-        rsi_sig  = np.zeros(n, int)
-        macd_sig2= np.zeros(n, int)
-        bb_sig   = np.zeros(n, int)
+        ma_sig = np.zeros(n, int)
+        rsi_sig = np.zeros(n, int)
+        macd_sig2 = np.zeros(n, int)
+        bb_sig = np.zeros(n, int)
 
         for i in range(1, n):
-            # MA crossover
             if close[i-1] < ma[i-1] and close[i] > ma[i]:   ma_sig[i] = 1
             elif close[i-1] > ma[i-1] and close[i] < ma[i]: ma_sig[i] = -1
-            # RSI zones
             if rsi[i] < 30:   rsi_sig[i] = 1
             elif rsi[i] > 70: rsi_sig[i] = -1
-            # MACD crossover
             if macd[i-1] < sigl[i-1] and macd[i] > sigl[i]:   macd_sig2[i] = 1
             elif macd[i-1] > sigl[i-1] and macd[i] < sigl[i]: macd_sig2[i] = -1
-            # BB extremes (if present)
-            if include_bb and {"BB_U","BB_L"}.issubset(df.columns):
-                if close[i] < df["BB_L"].iloc[i]: bb_sig[i] = 1
-                elif close[i] > df["BB_U"].iloc[i]: bb_sig[i] = -1
+            if include_bb and {"BB_U","BB_L"}.issubset(d.columns):
+                if close[i] < d["BB_L"].iloc[i]: bb_sig[i] = 1
+                elif close[i] > d["BB_U"].iloc[i]: bb_sig[i] = -1
 
-        # Weighted composite
-        if use_weighted:
-            comp = w_ma*ma_sig + w_rsi*rsi_sig + w_macd*macd_sig2 + (w_bb*bb_sig if include_bb else 0)
-        else:
-            comp = ma_sig + rsi_sig + macd_sig2  # original
+        comp = (w_ma*ma_sig + w_rsi*rsi_sig + w_macd*macd_sig2 + (w_bb*bb_sig if include_bb else 0)) if use_weighted \
+               else (ma_sig + rsi_sig + macd_sig2)
 
-        # Trade signal
         if allow_short:
             trade = np.where(comp >= threshold, 1, np.where(comp <= -threshold, -1, 0))
         else:
             trade = np.where(comp >= threshold, 1, 0)
 
-        df["MA_Signal"] = ma_sig
-        df["RSI_Signal"] = rsi_sig
-        df["MACD_Signal2"] = macd_sig2
-        if include_bb: df["BB_Signal"] = bb_sig
-        df["Composite"] = comp.astype(float)
-        df["Trade"] = trade.astype(int)
-        return df
+        d["MA_Signal"], d["RSI_Signal"], d["MACD_Signal2"] = ma_sig, rsi_sig, macd_sig2
+        if include_bb: d["BB_Signal"] = bb_sig
+        d["Composite"] = comp.astype(float)
+        d["Trade"] = trade.astype(int)
+        return d
 
-    # ─────────── Backtest (supports shorts + costs + ATR exits) ───────────
-    def backtest(df, *, allow_short=False, cost_bps=0.0, sl_atr_mult=0.0, tp_atr_mult=0.0):
+    def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
+                 sl_atr_mult=0.0, tp_atr_mult=0.0, vol_target=0.0, interval="1d"):
         d = df.copy()
         d["Return"] = d["Close"].pct_change().fillna(0.0)
 
-        # Positioning
+        # Base position from trade signal
         if allow_short:
             d["Position"] = d["Trade"].shift(1).fillna(0).clip(-1,1)
-            strat_ret = np.where(d["Position"]>=0, d["Return"], -d["Return"])
+            base_ret = np.where(d["Position"]>=0, d["Return"], -d["Return"])
         else:
             d["Position"] = d["Trade"].shift(1).fillna(0).clip(0,1)
-            strat_ret = d["Position"] * d["Return"]
+            base_ret = d["Position"] * d["Return"]
 
-        # Costs on position changes
-        cost = cost_bps / 10000.0
+        # Vol targeting (rolling 20 bars)
+        if vol_target and vol_target > 0:
+            look = 20
+            daily_vol = d["Return"].rolling(look).std(ddof=0)
+            ann = 252 if interval == "1d" else 252*6
+            realized = daily_vol * math.sqrt(ann)
+            scale = (vol_target / realized).clip(0, 3.0).fillna(0.0)  # cap leverage
+            base_ret = base_ret * scale
+
+        # Costs on trades
+        cost = cost_bps/10000.0
         pos_change = d["Position"].diff().fillna(0).abs()
-        # Opening + closing both cost a side each
-        cost_ret = -cost * (pos_change > 0).astype(float) * 2.0
-        d["StratRet"] = strat_ret + cost_ret
+        tcost = -2.0*cost*(pos_change > 0).astype(float)  # open+close
+        d["StratRet"] = base_ret + tcost
 
-        # Simple ATR exits (if enabled): when hit, force flat next bar
-        if sl_atr_mult > 0 or tp_atr_mult > 0:
+        # ATR exits → flatten next bar
+        if (sl_atr_mult>0 or tp_atr_mult>0) and "ATR" in d.columns:
             flat = np.zeros(len(d), dtype=int)
-            entry_px = np.nan
+            entry = np.nan
             for i in range(len(d)):
-                p = d["Position"].iat[i]
-                c = d["Close"].iat[i]
-                a = d["ATR"].iat[i] if "ATR" in d.columns else np.nan
-                if p != 0 and np.isnan(entry_px):
-                    entry_px = c
-                if p == 0:
-                    entry_px = np.nan
+                p, c, a = d["Position"].iat[i], d["Close"].iat[i], d["ATR"].iat[i]
+                if p != 0 and np.isnan(entry): entry = c
+                if p == 0: entry = np.nan
                 if p != 0 and not np.isnan(a):
-                    if p == 1:
-                        if c <= entry_px - sl_atr_mult*a or c >= entry_px + tp_atr_mult*a:
-                            flat[i] = 1
-                            entry_px = np.nan
-                    else:  # short
-                        if c >= entry_px + sl_atr_mult*a or c <= entry_px - tp_atr_mult*a:
-                            flat[i] = 1
-                            entry_px = np.nan
-            if flat.any():
-                d.loc[flat==1, "Position"] = 0
+                    if p == 1 and (c <= entry - sl_atr_mult*a or c >= entry + tp_atr_mult*a):
+                        flat[i] = 1; entry = np.nan
+                    if p == -1 and (c >= entry + sl_atr_mult*a or c <= entry - tp_atr_mult*a):
+                        flat[i] = 1; entry = np.nan
+            if flat.any(): d.loc[flat==1, "Position"] = 0
 
         d["CumBH"]    = (1 + d["Return"]).cumprod()
         d["CumStrat"] = (1 + d["StratRet"]).cumprod()
-        dd  = d["CumStrat"] / d["CumStrat"].cummax() - 1
+
+        dd = d["CumStrat"]/d["CumStrat"].cummax() - 1
         max_dd = float(dd.min()*100)
-        ann = 252 if pd.api.types.is_datetime64_any_dtype(d.iloc[:,0]) else 252
-        m  = d["StratRet"].mean()*ann
-        v  = d["StratRet"].std(ddof=0)*np.sqrt(ann)
-        sharpe = float(m/v) if v>0 else np.nan
+        ann = 252
+        m  = float(d["StratRet"].mean()*ann)
+        v  = float(d["StratRet"].std(ddof=0)*math.sqrt(ann))
+        sharpe = m/v if v>0 else np.nan
         win_rt = float((d["StratRet"]>0).mean()*100)
         trades = int((pos_change>0).sum())
         tim = float((d["Position"]!=0).mean()*100)
-        # CAGR
-        n = len(d); cagr = (d["CumStrat"].iat[-1] ** (ann/max(n,1)) - 1) * 100 if n>0 else np.nan
+        n = max(len(d),1)
+        cagr = (d["CumStrat"].iat[-1] ** (ann/n) - 1) * 100 if n>0 else np.nan
         return d, max_dd, sharpe, win_rt, trades, tim, cagr
 
     # ─────────────────── Single‐Ticker Backtest ───────────────────
@@ -258,23 +239,22 @@ with tab_engine:
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
-        # Live-ish price from 1d bar (more reliable than .info)
         h = yf.download(_map_symbol(ticker), period="1d", progress=False)
         if not h.empty and "Close" in h:
             st.subheader(f"💲 Live Price: ${float(h['Close'].iloc[-1]):.2f}")
 
-        # ─── Dual‐Source News Feed ───
+        # Dual-source News Feed
         raw_news = getattr(yf.Ticker(_map_symbol(ticker)), "news", []) or []
         shown = 0
         if raw_news:
             st.markdown("### 📰 Recent News & Sentiment (YFinance)")
             for art in raw_news:
-                t = art.get("title",""); l = art.get("link","")
-                if not (t and l): continue
-                txt = art.get("summary", t)
+                t_ = art.get("title",""); l_ = art.get("link","")
+                if not (t_ and l_): continue
+                txt = art.get("summary", t_)
                 score = analyzer.polarity_scores(txt)["compound"]
                 emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
-                st.markdown(f"- [{t}]({l}) {emoji}")
+                st.markdown(f"- [{t_}]({l_}) {emoji}")
                 shown += 1
                 if shown >= 5: break
         if shown == 0:
@@ -288,22 +268,20 @@ with tab_engine:
             st.info("No recent news found.")
 
     if st.button("▶️ Run Composite Backtest"):
-        df_raw = load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                  period_sel, interval_sel, include_bb)
-        if df_raw.empty:
+        px = load_prices(ticker, period_sel, interval_sel)
+        if px.empty:
             st.error(f"No data for '{ticker}'"); st.stop()
-
+        df_raw = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
         df_sig = build_composite(df_raw, ma_window, rsi_period,
                                  use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
                                  include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
-
         df_c, max_dd, sharpe, win_rt, trades, tim, cagr = backtest(
             df_sig, allow_short=allow_short, cost_bps=cost_bps,
-            sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult
+            sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult, vol_target=vol_target, interval=interval_sel
         )
 
         last_trade = int(df_c["Trade"].iloc[-1])
-        rec = rec_map.get(last_trade if not allow_short else (1 if last_trade>0 else (-1 if last_trade<0 else 0)), "🟡 HOLD")
+        rec = rec_map.get(1 if last_trade>0 else (-1 if last_trade<0 else 0), "🟡 HOLD")
         st.success(f"**{ticker}**: {rec}")
 
         # Explanation
@@ -335,38 +313,39 @@ with tab_engine:
 
         st.markdown(f"""
 - **Buy & Hold:**    {(df_c['CumBH'].iloc[-1]-1)*100:.2f}%  
-- **Strategy:**      {(df_c['CumStrat'].iloc[-1]-1)*100:.2f}%
+- **Strategy:**      {(df_c['CumStrat'].iloc[-1]-1)*100:.2f}%  
 """)
 
         # Plots
+        idx = df_c.index
         fig, (ax1,ax2,ax3) = plt.subplots(3,1,figsize=(11,12), sharex=True)
-        ax1.plot(df_c["Date"] if "Date" in df_c.columns else df_c.index, df_c["Close"], label="Close")
-        ax1.plot(df_c["Date"] if "Date" in df_c.columns else df_c.index, df_c[f"MA{ma_window}"], label=f"MA{ma_window}")
+        ax1.plot(idx, df_c["Close"], label="Close")
+        ax1.plot(idx, df_c[f"MA{ma_window}"], label=f"MA{ma_window}")
         if include_bb and {"BB_U","BB_L"}.issubset(df_c.columns):
-            ax1.plot(df_c["BB_U"], label="BB Upper"); ax1.plot(df_c["BB_L"], label="BB Lower")
+            ax1.plot(idx, df_c["BB_U"], label="BB Upper"); ax1.plot(idx, df_c["BB_L"], label="BB Lower")
         ax1.legend(); ax1.set_title("Price & Indicators")
-
-        ax2.bar(df_c["Date"] if "Date" in df_c.columns else df_c.index, df_c["Composite"]); ax2.set_title("Composite (weighted)")
-
-        ax3.plot(df_c["CumBH"], ":", label="BH")
-        ax3.plot(df_c["CumStrat"], "-", label="Strat"); ax3.legend(); ax3.set_title("Equity")
+        ax2.bar(idx, df_c["Composite"]); ax2.set_title("Composite (weighted)")
+        ax3.plot(idx, df_c["CumBH"], ":", label="BH")
+        ax3.plot(idx, df_c["CumStrat"], "-", label="Strat"); ax3.legend(); ax3.set_title("Equity")
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
     # ─────────── Batch Backtest ───────────
-    st.markdown("---"); st.markdown("## Batch Backtest")
+    st.markdown("---")
+    st.markdown("## Batch Backtest")
     batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("▶️ Run Batch Backtest"):
         perf=[]
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
-            df_t = load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                    period_sel, interval_sel, include_bb)
-            if df_t.empty: continue
+            px = load_prices(t, period_sel, interval_sel)
+            if px.empty: continue
+            df_t = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
             df_tc = build_composite(df_t, ma_window, rsi_period,
                                     use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
                                     include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
             df_tc, md, sh, wr, trd, tim, cagr = backtest(df_tc, allow_short=allow_short, cost_bps=cost_bps,
-                                                         sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult)
+                                                         sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
+                                                         vol_target=vol_target, interval=interval_sel)
             perf.append({
                 "Ticker":t,
                 "Composite":float(df_tc["Composite"].iloc[-1]),
@@ -377,6 +356,7 @@ with tab_engine:
                 "Max Drawdown": md,
                 "Win Rate":     wr,
                 "Trades":       trd,
+                "Time in Mkt %": tim,
                 "CAGR %":       cagr
             })
         if perf:
@@ -387,7 +367,8 @@ with tab_engine:
             st.error("No valid data for batch tickers.")
 
     # ─────────── Midday Movers ───────────
-    st.markdown("---"); st.markdown("## 🌤️ Midday Movers (Intraday % Change)")
+    st.markdown("---")
+    st.markdown("## 🌤️ Midday Movers (Intraday % Change)")
     mover_list = st.text_area("Tickers to monitor (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("🔄 Get Midday Movers"):
         movers=[]
@@ -405,15 +386,14 @@ with tab_engine:
             change_pct = (last_price - open_price) / open_price * 100
             movers.append({"Ticker": sym, "Open": open_price, "Current": last_price, "Change %": change_pct})
         if movers:
-            df_m = pd.DataFrame(movers)
-            df_m["Change %"] = pd.to_numeric(df_m["Change %"], errors="coerce")
-            df_m = df_m.dropna(subset=["Change %"]).set_index("Ticker").sort_values("Change %", ascending=False)
+            df_m = pd.DataFrame(movers).dropna(subset=["Change %"]).set_index("Ticker").sort_values("Change %", ascending=False)
             st.dataframe(df_m, use_container_width=True)
         else:
             st.info("No valid intraday data found for those tickers.")
 
     # ─────────── Portfolio Simulator ───────────
-    st.markdown("---"); st.markdown("## 📊 Portfolio Simulator")
+    st.markdown("---")
+    st.markdown("## 📊 Portfolio Simulator")
     st.info("Enter your positions in CSV: ticker,shares,cost_basis")
     holdings = st.text_area("e.g.\nAAPL,10,150\nMSFT,5,300", height=100)
     if st.button("▶️ Simulate Portfolio"):
@@ -426,26 +406,32 @@ with tab_engine:
             tkr = _map_symbol(ticker_.upper().strip())
             try:
                 s=float(shares); c=float(cost)
-            except: 
+            except:
                 st.warning(f"Invalid numbers on row {idx}: {row}"); continue
             hist = yf.Ticker(tkr).history(period="1d")
-            if hist.empty: 
+            if hist.empty:
                 st.warning(f"No price for {tkr}"); continue
             price=float(hist["Close"].iloc[-1])
             invested=s*c; value=s*price; pnl=value-invested
             pnl_pct=(pnl/invested*100) if invested else np.nan
-            df_raw=load_and_compute(tkr, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                    period_sel, interval_sel, include_bb)
-            if df_raw.empty: comp_sugg="N/A"
+
+            # Composite suggestion
+            px = load_prices(tkr, period_sel, interval_sel)
+            if px.empty:
+                comp_sugg="N/A"
             else:
-                df_c=build_composite(df_raw, ma_window, rsi_period,
-                                     use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
-                                     include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
+                df_i = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
+                df_c = build_composite(df_i, ma_window, rsi_period,
+                                       use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                       include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
                 score=float(df_c["Composite"].iloc[-1])
                 comp_sugg = "🟢 BUY" if score>=comp_thr else ("🔴 SELL" if score<=-comp_thr else "🟡 HOLD")
+
+            # Guardrails override
             if pnl_pct > profit_target:     suggestion="🔴 SELL"
             elif pnl_pct < -loss_limit:     suggestion="🟢 BUY"
             else:                           suggestion=comp_sugg
+
             data.append({
                 "Ticker":tkr,"Shares":s,"Cost Basis":c,"Price":price,
                 "Market Value":value,"Invested":invested,"P/L":pnl,
@@ -466,7 +452,8 @@ with tab_engine:
             st.error("No valid holdings provided.")
 
     # ─────────── Hyperparameter Optimization ───────────
-    st.markdown("---"); st.markdown("## 🛠️ Hyperparameter Optimization")
+    st.markdown("---")
+    st.markdown("## 🛠️ Hyperparameter Optimization")
     ma_list  = st.sidebar.multiselect("MA windows",     [5,10,15,20,30], default=[ma_window], key="grid_ma")
     rsi_list = st.sidebar.multiselect("RSI lookbacks",  [7,14,21,28],   default=[rsi_period], key="grid_rsi")
     mf_list  = st.sidebar.multiselect("MACD fast spans",[8,12,16,20],   default=[macd_fast],  key="grid_mf")
@@ -475,9 +462,8 @@ with tab_engine:
     if st.button("🏃‍♂️ Run Grid Search"):
         if not ticker:
             st.error("Enter a ticker first."); st.stop()
-        df_full=load_and_compute(ticker, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                 period_sel, interval_sel, include_bb)
-        if df_full.empty:
+        px = load_prices(ticker, period_sel, interval_sel)
+        if px.empty:
             st.error(f"No data for '{ticker}'"); st.stop()
         results=[]
         with st.spinner("Testing parameter combos…"):
@@ -486,18 +472,20 @@ with tab_engine:
                     for mf_ in mf_list:
                         for ms_ in ms_list:
                             for s_ in sig_list:
-                                df_i=load_and_compute(ticker, mw, rp_, mf_, ms_, s_, period_sel, interval_sel, include_bb)
-                                if df_i.empty: continue
-                                df_ci=build_composite(df_i, mw, rp_,
-                                                      use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi,
-                                                      w_macd=w_macd, w_bb=w_bb, include_bb=include_bb,
-                                                      threshold=comp_thr, allow_short=allow_short)
-                                df_ci, md_i, sh_i, wr_i, trd_i, tim_i, cagr_i = backtest(
-                                    df_ci, allow_short=allow_short, cost_bps=cost_bps,
-                                    sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult)
+                                dfi = compute_indicators(px, mw, rp_, mf_, ms_, s_, use_bb=include_bb)
+                                if dfi.empty: continue
+                                sigs = build_composite(dfi, mw, rp_,
+                                                       use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi,
+                                                       w_macd=w_macd, w_bb=w_bb, include_bb=include_bb,
+                                                       threshold=comp_thr, allow_short=allow_short)
+                                bt, md_i, sh_i, wr_i, trd_i, tim_i, cagr_i = backtest(
+                                    sigs, allow_short=allow_short, cost_bps=cost_bps,
+                                    sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
+                                    vol_target=vol_target, interval=interval_sel
+                                )
                                 results.append({
                                     "MA":mw,"RSI":rp_,"MACD Fast":mf_,"MACD Slow":ms_,"MACD Sig":s_,
-                                    "Strategy %":(df_ci["CumStrat"].iloc[-1]-1)*100,
+                                    "Strategy %":(bt["CumStrat"].iloc[-1]-1)*100,
                                     "Sharpe":sh_i,"Max Drawdown":md_i,"Win Rate":wr_i,"CAGR %":cagr_i
                                 })
         if results:
@@ -508,31 +496,32 @@ with tab_engine:
             st.error("No valid parameter combinations found.")
 
     # ─────────── Watchlist Summary ───────────
-    st.markdown("---"); st.markdown("## ⏰ Watchlist Summary")
+    st.markdown("---")
+    st.markdown("## ⏰ Watchlist Summary")
     watch = st.text_area("Enter tickers", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
     if st.button("📬 Generate Watchlist Summary"):
         table=[]
         for t in [x.strip() for x in watch.split(",") if x.strip()]:
-            df_t=load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                  period_sel, interval_sel, include_bb)
-            if df_t.empty:
+            px = load_prices(t, period_sel, interval_sel)
+            if px.empty:
                 table.append({"Ticker":t,"Composite":None,"Signal":"N/A"}); continue
-            df_w=build_composite(df_t, ma_window, rsi_period,
-                                 use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
-                                 include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
-            comp=float(df_w["Composite"].iloc[-1])
+            dft = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
+            sigs= build_composite(dft, ma_window, rsi_period,
+                                  use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                  include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
+            comp=float(sigs["Composite"].iloc[-1])
             sig = "🟢 BUY" if comp>=comp_thr else ("🔴 SELL" if comp<=-comp_thr else "🟡 HOLD")
             table.append({"Ticker":t,"Composite":comp,"Signal":sig})
         df_watch=pd.DataFrame(table).set_index("Ticker")
         st.dataframe(df_watch, use_container_width=True)
         for t in df_watch.index:
-            df_t=load_and_compute(t, ma_window, rsi_period, macd_fast, macd_slow, macd_signal,
-                                  period_sel, interval_sel, include_bb)
-            if df_t.empty: continue
-            df_c=build_composite(df_t, ma_window, rsi_period,
-                                 use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
-                                 include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
-            last=df_c.iloc[-1]
+            px = load_prices(t, period_sel, interval_sel); 
+            if px.empty: continue
+            dft = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
+            sigs= build_composite(dft, ma_window, rsi_period,
+                                  use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                  include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
+            last=sigs.iloc[-1]
             ma_s=int(last["MA_Signal"]); rsi_s=int(last["RSI_Signal"]); macd_s=int(last["MACD_Signal2"])
             rsi_v=float(last[f"RSI{rsi_period}"])
             ma_txt={1:f"Price ↑ above MA{ma_window}.",0:"No crossover.",-1:f"Price ↓ below MA."}[ma_s]
@@ -542,8 +531,152 @@ with tab_engine:
                 st.write(f"- **MA:**  {ma_txt}")
                 st.write(f"- **RSI:** {rsi_txt}")
                 st.write(f"- **MACD:** {macd_txt}")
-                if include_bb and "BB_Signal" in df_c.columns:
+                if include_bb and "BB_Signal" in sigs.columns:
                     bb_s=int(last["BB_Signal"])
                     bb_txt={1:"Under lower band.",0:"Inside bands.",-1:"Over upper band."}[bb_s]
                     st.write(f"- **BB:** {bb_txt}")
                 st.write(f"- **Composite Score:** {df_watch.loc[t,'Composite']:.2f}")
+
+    # ─────────── Multi-Timeframe Confirmation ───────────
+    st.markdown("---")
+    st.markdown("## ⏱️ Multi-Timeframe Confirmation")
+    mtf_symbol = st.text_input("Symbol (for MTF check)", value=ticker or "AAPL")
+    if st.button("🔍 Check MTF"):
+        try:
+            d1 = compute_indicators(load_prices(mtf_symbol, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+            cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+            daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
+            agree = int(np.sign(daily) == np.sign(hourly))
+            st.write(f"**Daily composite:** {daily:.2f}")
+            st.write(f"**Hourly composite:** {hourly:.2f}")
+            st.success("✅ Signals agree") if agree else st.warning("⚠️ Signals disagree")
+        except Exception as e:
+            st.error(f"MTF error: {e}")
+
+    # ─────────── Walk-Forward Optimization (simple OOS) ───────────
+    st.markdown("---")
+    st.markdown("## 🧪 Walk-Forward Optimization (Out-of-Sample)")
+    wf_symbol = st.text_input("WFO symbol", value=ticker or "AAPL")
+    c1, c2 = st.columns(2)
+    with c1:
+        ins_bars = st.number_input("In-sample bars", 60, 252*3, 126, 1)
+        oos_bars = st.number_input("OOS bars", 20, 252, 63, 1)
+    with c2:
+        w_thr = st.slider("Composite trigger (WFO)", 0.0, 3.0, 1.0, 0.1)
+        wf_allow_short = st.toggle("Allow shorts (WFO)", value=False)
+    run_wfo = st.button("🏃 Run Walk-Forward")
+
+    def walk_forward_optimize(symbol: str,
+                              ma_list: List[int], rsi_list: List[int],
+                              mf_list: List[int], ms_list: List[int], sig_list: List[int],
+                              insample_bars: int, oos_bars: int,
+                              w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, threshold=1.0,
+                              allow_short=False, cost_bps=5.0):
+        px = load_prices(symbol, "2y", "1d")
+        if px.empty: return pd.DataFrame(), pd.DataFrame()
+        oos_curves = []; summary = []
+        start = 200; i = start
+        while i + insample_bars + oos_bars <= len(px):
+            ins = px.iloc[i : i+insample_bars]
+            oos = px.iloc[i+insample_bars : i+insample_bars+oos_bars]
+            best = None; best_score = -1e9
+            for mw in ma_list:
+                for rp in rsi_list:
+                    for mf in mf_list:
+                        for ms in ms_list:
+                            for s in sig_list:
+                                ins_ind = compute_indicators(ins, mw, rp, mf, ms, s, use_bb=True)
+                                if ins_ind.empty: continue
+                                ins_sig = build_composite(ins_ind, mw, rp, use_weighted=True, w_ma=w_ma, w_rsi=w_rsi,
+                                                          w_macd=w_macd, w_bb=w_bb, include_bb=True, threshold=threshold,
+                                                          allow_short=allow_short)
+                                ins_bt, md, sh, wr, tr, ti, cg = backtest(ins_sig, allow_short=allow_short, cost_bps=cost_bps)
+                                perf = (ins_bt["CumStrat"].iloc[-1]-1)*100
+                                score = perf - abs(md)
+                                if score > best_score:
+                                    best_score = score
+                                    best = (mw, rp, mf, ms, s, sh, perf, md)
+            if best is None:
+                i += oos_bars; continue
+            mw, rp, mf, ms, s, sh, perf, mdd = best
+            oos_ind = compute_indicators(oos, mw, rp, mf, ms, s, use_bb=True)
+            if oos_ind.empty:
+                i += oos_bars; continue
+            oos_sig = build_composite(oos_ind, mw, rp, use_weighted=True, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd,
+                                      w_bb=w_bb, include_bb=True, threshold=threshold, allow_short=allow_short)
+            oos_bt, mo_dd, mo_sh, *_ = backtest(oos_sig, allow_short=allow_short, cost_bps=cost_bps)
+            oos_curves.append(oos_bt[["CumStrat"]].rename(columns={"CumStrat":"Equity"}))
+            summary.append({
+                "Window": f"{oos.index[0].date()} → {oos.index[-1].date()}",
+                "MA": mw, "RSI": rp, "MACDf": mf, "MACDs": ms, "SIG": s,
+                "OOS %": (oos_bt["Equity"].iloc[-1]-1)*100,
+                "OOS Sharpe": mo_sh, "OOS MaxDD%": mo_dd
+            })
+            i += oos_bars
+        eq = pd.concat(oos_curves, axis=0) if oos_curves else pd.DataFrame()
+        sm = pd.DataFrame(summary)
+        return eq, sm
+
+    if run_wfo:
+        try:
+            eq, sm = walk_forward_optimize(
+                wf_symbol,
+                ma_list=[ma_window, max(5, ma_window-5), min(60, ma_window+5)],
+                rsi_list=[rsi_period, max(5, rsi_period-7), min(30, rsi_period+7)],
+                mf_list=[macd_fast, max(5, macd_fast-4), min(20, macd_fast+4)],
+                ms_list=[macd_slow, max(20, macd_slow-6), min(50, macd_slow+6)],
+                sig_list=[macd_signal, max(5, macd_signal-4), min(20, macd_signal+4)],
+                insample_bars=int(ins_bars),
+                oos_bars=int(oos_bars),
+                w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                threshold=w_thr, allow_short=wf_allow_short, cost_bps=5.0
+            )
+            if not sm.empty:
+                st.dataframe(sm, use_container_width=True)
+            if not eq.empty:
+                fig, ax = plt.subplots(figsize=(10,3))
+                ax.plot(eq.index, eq["Equity"]); ax.set_title("Walk-Forward OOS Equity (stitched)")
+                st.pyplot(fig)
+            else:
+                st.info("WFO produced no OOS segments (not enough data).")
+        except Exception as e:
+            st.error(f"WFO error: {e}")
+
+    # ─────────── Portfolio Optimizer — Risk Parity ───────────
+    st.markdown("---")
+    st.markdown("## ⚖️ Portfolio Optimizer — Risk Parity")
+    opt_tickers = st.text_input("Tickers to optimize (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ").upper()
+    if st.button("🧮 Optimize (Risk Parity)"):
+        try:
+            tickers = [t.strip() for t in opt_tickers.split(",") if t.strip()]
+            rets = []; valid = []
+            for t in tickers:
+                px = load_prices(t, "1y", "1d")
+                if px.empty: continue
+                valid.append(t)
+                rets.append(px["Close"].pct_change().dropna())
+            if not rets:
+                st.error("No valid tickers/data."); st.stop()
+            R = pd.concat(rets, axis=1); R.columns = valid
+            cov = R.cov()
+            n = len(valid); w = np.ones(n)/n
+            for _ in range(500):
+                mrc = cov @ w
+                rc  = w * mrc
+                target = rc.mean()
+                grad = rc - target
+                w = np.clip(w - 0.05*grad, 0, None)
+                s = w.sum()
+                w = w / s if s > 1e-12 else np.ones(n)/n
+                if np.linalg.norm(grad) < 1e-6:
+                    break
+            weights = pd.Series(w, index=valid, name="Weight")
+            st.dataframe(weights.to_frame().T, use_container_width=True)
+            fig, ax = plt.subplots(figsize=(5,5))
+            weights.plot.pie(autopct="%.1f%%", ax=ax)
+            ax.set_ylabel(""); ax.set_title("Risk-Parity Weights")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Optimizer error: {e}")
