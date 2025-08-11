@@ -291,9 +291,9 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
         if flat.any(): d.loc[flat==1, "Position"] = 0
 
     ret_bh = d["Return"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-ret_st = d["StratRet"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-d["CumBH"] = (1 + ret_bh).cumprod()
-d["CumStrat"] = (1 + ret_st).cumprod()
+    ret_st = d["StratRet"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    d["CumBH"] = (1 + ret_bh).cumprod()
+    d["CumStrat"] = (1 + ret_st).cumprod()
 
     max_dd, sharpe, win_rt, trades, tim, cagr, last_cum = _stats_from_equity(d, interval)
     return d, max_dd, sharpe, win_rt, trades, tim, cagr
@@ -462,7 +462,9 @@ with tab_engine:
     st.markdown("---")
     st.markdown("### 📊 Portfolio Simulator")
     st.info("Enter your positions in CSV: ticker,shares,cost_basis")
-    holdings = st.text_area("e.g.\nAAPL,10,150\nMSFT,5,300", height=100)
+    holdings = st.text_area("e.g.
+AAPL,10,150
+MSFT,5,300", height=100)
     if st.button("▶️ Simulate Portfolio"):
         rows = [r.strip().split(",") for r in holdings.splitlines() if r.strip()]
         data=[]
