@@ -1,5 +1,4 @@
-# Write the provided full Streamlit app to a file so you can download it.
-src = r'''# app.py — QuantaraX Pro (v4)
+# app.py — QuantaraX Pro (v4)
 # ---------------------------------------------------------------------------------
 # pip install: streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
 # (scikit-learn is optional; ML features gracefully disable if not available)
@@ -18,7 +17,7 @@ import feedparser
 # Optional ML imports
 try:
     from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+    from sklearn.metrics import accuracy_score, roc_auc_score
     from sklearn.inspection import permutation_importance
     SKLEARN_OK = True
 except Exception:
@@ -84,7 +83,6 @@ profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10)
 loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5)
 
 # ───────────────────────────── Helpers ─────────────────────────────
-
 def _map_symbol(sym: str) -> str:
     s = sym.strip().upper()
     if "/" in s:  # e.g., BTC/USDT → BTC-USD
@@ -102,7 +100,6 @@ def load_prices(symbol: str, period: str, interval: str) -> pd.DataFrame:
     return df.dropna()
 
 # Technicals — expanded feature set
-
 def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int, sig: int,
                        use_bb: bool = True) -> pd.DataFrame:
     d = df.copy()
@@ -170,7 +167,6 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
 
     return d.dropna()
 
-
 def build_composite(df: pd.DataFrame, ma_w: int, rsi_p: int,
                     *, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
                     include_bb=True, threshold=0.0, allow_short=False) -> pd.DataFrame:
@@ -215,9 +211,7 @@ def build_composite(df: pd.DataFrame, ma_w: int, rsi_p: int,
     d["Trade"] = trade.astype(int)
     return d
 
-
 # Backtest (robust)
-
 def _stats_from_equity(d: pd.DataFrame, interval: str) -> Tuple[float,float,float,float,int,float,float]:
     ann = 252 if interval == "1d" else 252*6
     if d["CumStrat"].notna().any():
@@ -236,7 +230,6 @@ def _stats_from_equity(d: pd.DataFrame, interval: str) -> Tuple[float,float,floa
     n_eff    = int(d["StratRet"].notna().sum())
     cagr     = ((last_cum ** (ann / max(n_eff, 1))) - 1) * 100 if n_eff > 0 else np.nan
     return max_dd, sharpe, win_rt, trades, tim, cagr, last_cum
-
 
 def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
              sl_atr_mult=0.0, tp_atr_mult=0.0, vol_target=0.0, interval="1d"):
@@ -296,9 +289,8 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
     d["CumBH"] = (1 + ret_bh).cumprod()
     d["CumStrat"] = (1 + ret_st).cumprod()
 
-    max_dd, sharpe, win_rt, trades, tim, cagr, last_cum = _stats_from_equity(d, interval)
+    max_dd, sharpe, win_rt, trades, tim, cagr, _ = _stats_from_equity(d, interval)
     return d, max_dd, sharpe, win_rt, trades, tim, cagr
-
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
@@ -463,9 +455,10 @@ with tab_engine:
     st.markdown("---")
     st.markdown("### 📊 Portfolio Simulator")
     st.info("Enter your positions in CSV: ticker,shares,cost_basis")
-    holdings = st.text_area("""e.g.
-AAPL,10,150
-MSFT,5,300""", height=100)
+    holdings = st.text_area(
+        "e.g.\nAAPL,10,150\nMSFT,5,300",
+        height=100
+    )
     if st.button("▶️ Simulate Portfolio"):
         rows = [r.strip().split(",") for r in holdings.splitlines() if r.strip()]
         data=[]
@@ -593,13 +586,12 @@ with tab_ml:
                 st.info("Permutation importance unavailable.")
 
             # Convert ML probs to trades and backtest
-            sig = pd.Series(0, index=test.index)
             if allow_short:
                 sig = np.where(proba >= proba_enter, 1, np.where(proba <= proba_exit, -1, 0))
             else:
                 sig = np.where(proba >= proba_enter, 1, 0)
             ml_df = ind.loc[test.index].copy()
-            ml_df["Trade"] = sig.astype(int)
+            ml_df["Trade"] = pd.Series(sig, index=ml_df.index).astype(int)
             bt, md, sh, wr, trd, tim, cagr = backtest(ml_df, allow_short=allow_short, cost_bps=cost_bps,
                                                        sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
                                                        vol_target=vol_target, interval=interval_sel)
@@ -675,7 +667,7 @@ with tab_regime:
             feat["mom20"] = ind["Close"].pct_change(20)
             feat["ma_slope"] = ind[f"MA{ma_window}"].diff()
             feat = feat.dropna()
-            # KMeans without sklearn? We rely on sklearn; else fallback to quantiles (3 bins)
+            # KMeans without sklearn? fallback to quantiles (3 bins)
             if SKLEARN_OK:
                 from sklearn.cluster import KMeans
                 km = KMeans(n_clusters=3, n_init=10, random_state=42)
@@ -693,10 +685,14 @@ with tab_regime:
             # Plot
             fig, ax = plt.subplots(figsize=(10,4))
             ax.plot(joined.index, joined["Close"], label="Close")
-            colors = {0:"tab:red",1:"tab:orange",2:"tab:green"}
-            for r in sorted(joined["Regime"].dropna().unique()):
+            # shade each regime block
+            for r in sorted([x for x in joined["Regime"].dropna().unique()]):
                 seg = joined[joined["Regime"]==r]
-                ax.fill_between(seg.index, seg["Close"].min(), seg["Close"].max(), alpha=0.08)
+                if seg.empty: 
+                    continue
+                y1 = np.full(len(seg), seg["Close"].min())
+                y2 = np.full(len(seg), seg["Close"].max())
+                ax.fill_between(seg.index, y1, y2, alpha=0.08)
             ax.set_title("Price with Regime Shading")
             st.pyplot(fig)
         except Exception as e:
@@ -790,10 +786,3 @@ with tab_help:
 
 Everything is guarded for empty data / short histories to avoid runtime errors.
 """)
-'''
-# quick syntax check
-compile(src, "app.py", "exec")
-# write file
-with open("/mnt/data/app.py", "w", encoding="utf-8") as f:
-    f.write(src)
-print("Saved to /mnt/data/app.py")
