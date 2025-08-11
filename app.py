@@ -78,6 +78,13 @@ st.sidebar.subheader("Data")
 period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1)
 interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0)
 
+# Network safety toggle
+st.sidebar.subheader("Network")
+offline_mode = st.sidebar.toggle(
+    "Offline mode (skip live price/news)", value=False,
+    help="Skips live price lookup and Yahoo Finance news calls to avoid timeouts. Backtests still use price downloads when you press Run."
+)
+
 st.sidebar.subheader("Portfolio Guardrails")
 profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10)
 loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5)
@@ -310,6 +317,7 @@ with tab_engine:
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
+    if not offline_mode:
         # Live price (robust, quiet)
         price = None
         try:
@@ -332,29 +340,43 @@ with tab_engine:
         if price is not None:
             st.subheader(f"💲 Live Price: ${price:,.2f}")
 
-        # Dual-source News Feed
-        raw_news = getattr(yf.Ticker(_map_symbol(ticker)), "news", []) or []
+        # Dual-source News Feed (safe)
         shown = 0
+        raw_news = []
+        try:
+            tkr = yf.Ticker(_map_symbol(ticker))
+            # Prefer get_news() if available; fall back to .news
+            if hasattr(tkr, "get_news"):
+                raw_news = tkr.get_news() or []
+            else:
+                raw_news = getattr(tkr, "news", []) or []
+        except Exception:
+            raw_news = []
+
         if raw_news:
-            st.markdown("#### 📰 Recent News & Sentiment (YFinance)")
-            for art in raw_news:
+            st.markdown("#### 📰 Recent News & Sentiment (Yahoo Finance)")
+            for art in raw_news[:5]:
                 t_ = art.get("title",""); l_ = art.get("link","")
-                if not (t_ and l_): continue
+                if not (t_ and l_):
+                    continue
                 txt = art.get("summary", t_)
                 score = analyzer.polarity_scores(txt)["compound"]
                 emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
                 st.markdown(f"- [{t_}]({l_}) {emoji}")
                 shown += 1
-                if shown >= 5: break
+
         if shown == 0:
             st.markdown("#### 📰 Recent News (RSS)")
             rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={_map_symbol(ticker)}&region=US&lang=en-US"
             feed = feedparser.parse(rss_url)
-            for entry in feed.entries[:5]:
+            for entry in getattr(feed, "entries", [])[:5]:
                 st.markdown(f"- [{entry.title}]({entry.link})")
                 shown += 1
+        
         if shown == 0:
             st.info("No recent news found.")
+    else:
+        st.info("Offline mode is ON — skipping live price and news calls.")
 
     if st.button("▶️ Run Composite Backtest"):
         px = load_prices(ticker, period_sel, interval_sel)
