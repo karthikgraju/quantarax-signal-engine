@@ -317,66 +317,66 @@ with tab_engine:
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL").upper()
 
     if ticker:
-    if not offline_mode:
-        # Live price (robust, quiet)
-        price = None
-        try:
-            h = yf.download(_map_symbol(ticker), period="1d", auto_adjust=False, progress=False, threads=False)
-            if not h.empty and "Close" in h.columns:
-                price = float(pd.to_numeric(h["Close"].tail(1)).iloc[0])
-        except Exception:
-            h = pd.DataFrame()
-        if price is None:
+        if not offline_mode:
+            # Live price (robust, quiet)
+            price = None
             try:
-                tk = yf.Ticker(_map_symbol(ticker))
-                fi = getattr(tk, "fast_info", None)
-                price = getattr(fi, "last_price", None)
-                if price is None:
-                    hist = tk.history(period="5d", interval="1d", auto_adjust=False)
-                    if not hist.empty:
-                        price = float(pd.to_numeric(hist["Close"].tail(1)).iloc[0])
+                h = yf.download(_map_symbol(ticker), period="1d", auto_adjust=False, progress=False, threads=False)
+                if not h.empty and "Close" in h.columns:
+                    price = float(pd.to_numeric(h["Close"].tail(1)).iloc[0])
             except Exception:
-                price = None
-        if price is not None:
-            st.subheader(f"💲 Live Price: ${price:,.2f}")
+                h = pd.DataFrame()
+            if price is None:
+                try:
+                    tk = yf.Ticker(_map_symbol(ticker))
+                    fi = getattr(tk, "fast_info", None)
+                    price = getattr(fi, "last_price", None)
+                    if price is None:
+                        hist = tk.history(period="5d", interval="1d", auto_adjust=False)
+                        if not hist.empty:
+                            price = float(pd.to_numeric(hist["Close"].tail(1)).iloc[0])
+                except Exception:
+                    price = None
+            if price is not None:
+                st.subheader(f"💲 Live Price: ${price:,.2f}")
 
-        # Dual-source News Feed (safe)
-        shown = 0
-        raw_news = []
-        try:
-            tkr = yf.Ticker(_map_symbol(ticker))
-            # Prefer get_news() if available; fall back to .news
-            if hasattr(tkr, "get_news"):
-                raw_news = tkr.get_news() or []
-            else:
-                raw_news = getattr(tkr, "news", []) or []
-        except Exception:
+            # Dual-source News Feed (safe)
+            shown = 0
             raw_news = []
+            try:
+                tkr = yf.Ticker(_map_symbol(ticker))
+                # Prefer get_news() if available; fall back to .news
+                if hasattr(tkr, "get_news"):
+                    raw_news = tkr.get_news() or []
+                else:
+                    raw_news = getattr(tkr, "news", []) or []
+            except Exception:
+                raw_news = []
 
-        if raw_news:
-            st.markdown("#### 📰 Recent News & Sentiment (Yahoo Finance)")
-            for art in raw_news[:5]:
-                t_ = art.get("title",""); l_ = art.get("link","")
-                if not (t_ and l_):
-                    continue
-                txt = art.get("summary", t_)
-                score = analyzer.polarity_scores(txt)["compound"]
-                emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
-                st.markdown(f"- [{t_}]({l_}) {emoji}")
-                shown += 1
+            if raw_news:
+                st.markdown("#### 📰 Recent News & Sentiment (Yahoo Finance)")
+                for art in raw_news[:5]:
+                    t_ = art.get("title",""); l_ = art.get("link","")
+                    if not (t_ and l_):
+                        continue
+                    txt = art.get("summary", t_)
+                    score = analyzer.polarity_scores(txt)["compound"]
+                    emoji = "🔺" if score>0.1 else ("🔻" if score<-0.1 else "➖")
+                    st.markdown(f"- [{t_}]({l_}) {emoji}")
+                    shown += 1
 
-        if shown == 0:
-            st.markdown("#### 📰 Recent News (RSS)")
-            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={_map_symbol(ticker)}&region=US&lang=en-US"
-            feed = feedparser.parse(rss_url)
-            for entry in getattr(feed, "entries", [])[:5]:
-                st.markdown(f"- [{entry.title}]({entry.link})")
-                shown += 1
-        
-        if shown == 0:
-            st.info("No recent news found.")
-    else:
-        st.info("Offline mode is ON — skipping live price and news calls.")
+            if shown == 0:
+                st.markdown("#### 📰 Recent News (RSS)")
+                rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={_map_symbol(ticker)}&region=US&lang=en-US"
+                feed = feedparser.parse(rss_url)
+                for entry in getattr(feed, "entries", [])[:5]:
+                    st.markdown(f"- [{entry.title}]({entry.link})")
+                    shown += 1
+
+            if shown == 0:
+                st.info("No recent news found.")
+        else:
+            st.info("Offline mode is ON — skipping live price and news calls.")
 
     if st.button("▶️ Run Composite Backtest"):
         px = load_prices(ticker, period_sel, interval_sel)
