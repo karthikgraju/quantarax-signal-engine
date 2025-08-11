@@ -290,8 +290,10 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
                     flat[i] = 1; entry = np.nan
         if flat.any(): d.loc[flat==1, "Position"] = 0
 
-    d["CumBH"]    = (1 + d["Return"]).replace([np.inf,-np.inf], np.nan).fillna(0.0).add(1).cumprod()
-    d["CumStrat"] = (1 + d["StratRet"]).replace([np.inf,-np.inf], np.nan).fillna(0.0).add(1).cumprod()
+    ret_bh = d["Return"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+ret_st = d["StratRet"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+d["CumBH"] = (1 + ret_bh).cumprod()
+d["CumStrat"] = (1 + ret_st).cumprod()
 
     max_dd, sharpe, win_rt, trades, tim, cagr, last_cum = _stats_from_equity(d, interval)
     return d, max_dd, sharpe, win_rt, trades, tim, cagr
