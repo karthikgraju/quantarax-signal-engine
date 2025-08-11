@@ -1,4 +1,5 @@
-# app.py — QuantaraX Pro (v4)
+# Write the provided full Streamlit app to a file so you can download it.
+src = r'''# app.py — QuantaraX Pro (v4)
 # ---------------------------------------------------------------------------------
 # pip install: streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
 # (scikit-learn is optional; ML features gracefully disable if not available)
@@ -462,9 +463,9 @@ with tab_engine:
     st.markdown("---")
     st.markdown("### 📊 Portfolio Simulator")
     st.info("Enter your positions in CSV: ticker,shares,cost_basis")
-    holdings = st.text_area("e.g.
+    holdings = st.text_area("""e.g.
 AAPL,10,150
-MSFT,5,300", height=100)
+MSFT,5,300""", height=100)
     if st.button("▶️ Simulate Portfolio"):
         rows = [r.strip().split(",") for r in holdings.splitlines() if r.strip()]
         data=[]
@@ -789,3 +790,10 @@ with tab_help:
 
 Everything is guarded for empty data / short histories to avoid runtime errors.
 """)
+'''
+# quick syntax check
+compile(src, "app.py", "exec")
+# write file
+with open("/mnt/data/app.py", "w", encoding="utf-8") as f:
+    f.write(src)
+print("Saved to /mnt/data/app.py")
