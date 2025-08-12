@@ -130,11 +130,11 @@ def rss_news(symbol: str, limit: int = 5) -> list:
 
 def safe_earnings(symbol: str) -> pd.DataFrame:
     """
-    Returns DataFrame with normalized 'earn_date' (datetime64).
+    Returns DataFrame with normalized 'earn_date' (datetime64[ns, UTC]).
     Handles index/column schema variations from yfinance.
     """
     try:
-        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=8)
+        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=16)
         if isinstance(cal, pd.DataFrame) and not cal.empty:
             df = cal.copy()
             # If date is index → promote to column
@@ -146,7 +146,7 @@ def safe_earnings(symbol: str) -> pd.DataFrame:
             # Find the date column robustly
             date_col = None
             for c in df.columns:
-                cl = c.lower().replace(" ", "")
+                cl = str(c).lower().replace(" ", "")
                 if "earn" in cl and "date" in cl:
                     date_col = c; break
             if date_col is None:
@@ -157,12 +157,29 @@ def safe_earnings(symbol: str) -> pd.DataFrame:
                 date_col = df.columns[0]
 
             df = df.rename(columns={date_col: "earn_date"})
-            df["earn_date"] = pd.to_datetime(df["earn_date"], errors="coerce")
+            df["earn_date"] = pd.to_datetime(df["earn_date"], errors="coerce", utc=True)
             cols = ["earn_date"] + [c for c in df.columns if c != "earn_date"]
             return df[cols].dropna(subset=["earn_date"])
     except Exception:
         pass
     return pd.DataFrame()
+
+def render_next_earnings(symbol: str) -> None:
+    """Show nearest future earnings in UTC; else last past date."""
+    er = safe_earnings(symbol)
+    if er.empty or "earn_date" not in er.columns:
+        st.info("📅 Next Earnings: unavailable.")
+        return
+    er = er.dropna(subset=["earn_date"]).copy()
+    er["earn_date"] = pd.to_datetime(er["earn_date"], errors="coerce", utc=True)
+    now = pd.Timestamp.utcnow().tz_localize("UTC")
+    future = er[er["earn_date"] >= now]
+    if not future.empty:
+        dt = future.sort_values("earn_date").iloc[0]["earn_date"]
+        st.info(f"📅 Next Earnings: **{dt.date()}** (UTC)")
+    else:
+        dt = er.sort_values("earn_date").iloc[-1]["earn_date"]
+        st.info(f"📅 Last Earnings: **{dt.date()}** (UTC) — no upcoming found.")
 
 # ─────────── Indicators / Composite ───────────
 def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int, sig: int,
@@ -392,14 +409,8 @@ with tab_engine:
         else:
             st.info("No recent news found.")
 
-    # Earnings (robust)
-    er = safe_earnings(ticker)
-    if not er.empty and "earn_date" in er.columns:
-        nxt = er.dropna(subset=["earn_date"]).sort_values("earn_date").head(1)
-        if not nxt.empty:
-            ed = nxt["earn_date"].iloc[0]
-            ed = ed.date() if isinstance(ed, pd.Timestamp) else pd.to_datetime(ed, errors="coerce").date()
-            st.info(f"📅 Next Earnings: **{ed}**")
+    # Earnings (robust nearest-future selection)
+    render_next_earnings(ticker)
 
     if st.button("▶️ Run Composite Backtest", key="btn_engine_backtest"):
         px = load_prices(ticker, period_sel, interval_sel)
@@ -484,15 +495,26 @@ with tab_engine:
         mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="inp_mtf_symbol")
         if st.button("🔍 Check MTF", key="btn_mtf"):
             try:
-                d1 = compute_indicators(load_prices(mtf_symbol, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-                dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-                if d1.empty or dH.empty: st.warning("Insufficient data for MTF."); st.stop()
-                c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
-                cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
-                daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
-                st.write(f"**Daily composite:** {daily:.2f}")
-                st.write(f"**Hourly composite:** {hourly:.2f}")
-                st.success("✅ Signals agree") if np.sign(daily) == np.sign(hourly) else st.warning("⚠️ Signals disagree")
+                d_daily  = load_prices(mtf_symbol, "1y",  "1d")
+                d_hourly = load_prices(mtf_symbol, "60d", "1h")  # more intraday history
+                d1 = compute_indicators(d_daily,  ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                dH = compute_indicators(d_hourly, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                if d1.empty or dH.empty:
+                    st.warning("Insufficient data for MTF (try longer history).")
+                else:
+                    c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True,
+                                         w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                                         include_bb=True, threshold=1.0)
+                    cH = build_composite(dH, ma_window, rsi_period, use_weighted=True,
+                                         w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                                         include_bb=True, threshold=1.0)
+                    daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
+                    st.write(f"**Daily composite:** {daily:.2f}")
+                    st.write(f"**Hourly composite:** {hourly:.2f}")
+                    if np.sign(daily) == np.sign(hourly):
+                        st.success("✅ Signals agree")
+                    else:
+                        st.warning("⚠️ Signals disagree")
             except Exception as e:
                 st.error(f"MTF error: {e}")
 
