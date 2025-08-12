@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro (v11.1, investor-ready, WFO+MTF fix)
+# app.py — QuantaraX Pro (v12, investor-ready + turbo features)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
@@ -7,6 +7,7 @@ import math
 from typing import List, Tuple, Optional
 import time
 import warnings
+from io import StringIO
 
 import streamlit as st
 import yfinance as yf
@@ -28,7 +29,7 @@ except Exception:
     SKLEARN_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v11.1", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v12", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
@@ -45,29 +46,29 @@ for k, v in DEFAULTS.items():
 
 colA, colB = st.sidebar.columns([1,1])
 with colA:
-    mode = st.selectbox("Mode", ["Retail (simple)", "Investor (advanced)"], index=1, key="v11_mode")
+    mode = st.selectbox("Mode", ["Retail (simple)", "Investor (advanced)"], index=1, key="v12_mode")
 with colB:
-    benchmark = st.text_input("Benchmark", "SPY", key="v11_bmk").upper().strip() or "SPY"
+    benchmark = st.text_input("Benchmark", "SPY", key="v12_bmk").upper().strip() or "SPY"
 
-if st.sidebar.button("🔄 Reset to defaults", key="v11_btn_reset_defaults"):
+if st.sidebar.button("🔄 Reset to defaults", key="v12_btn_reset_defaults"):
     for k, v in DEFAULTS.items():
         st.session_state[k] = v
 
 st.sidebar.subheader("Indicator Parameters")
-ma_window   = st.sidebar.slider("MA window",      5, 60, st.session_state["ma_window"],   key="v11_ma_window")
-rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="v11_rsi_period")
-macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="v11_macd_fast")
-macd_slow   = st.sidebar.slider("MACD slow span", 20, 50, st.session_state["macd_slow"],  key="v11_macd_slow")
-macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="v11_macd_signal")
+ma_window   = st.sidebar.slider("MA window",      5, 60, st.session_state["ma_window"],   key="v12_ma_window")
+rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="v12_rsi_period")
+macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="v12_macd_fast")
+macd_slow   = st.sidebar.slider("MACD slow span", 20, 50, st.session_state["macd_slow"],  key="v12_macd_slow")
+macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="v12_macd_signal")
 
 st.sidebar.subheader("Composite Preset")
 preset = st.sidebar.selectbox(
     "Select style",
     ["Custom", "Trend (MA+MACD)", "Mean-Revert (RSI+BB)", "Balanced"],
-    key="v11_preset",
+    key="v12_preset",
 )
-use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="v11_use_weighted")
-include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True, key="v11_include_bb")
+use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="v12_use_weighted")
+include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True, key="v12_include_bb")
 
 def preset_weights(name:str):
     if name == "Trend (MA+MACD)":
@@ -84,26 +85,27 @@ if preset != "Custom":
 else:
     w_ma_default, w_rsi_default, w_macd_default, w_bb_default, thr_default = 1.0, 1.0, 1.0, 0.5, 1.0
 
-w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, w_ma_default,   0.1, key="v11_w_ma")
-w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, w_rsi_default,  0.1, key="v11_w_rsi")
-w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, w_macd_default, 0.1, key="v11_w_macd")
-w_bb   = st.sidebar.slider("Weight • BB",   0.0, 2.0, w_bb_default,   0.1, key="v11_w_bb") if include_bb else 0.0
-comp_thr = st.sidebar.slider("Composite trigger (enter/exit)", 0.0, 3.0, thr_default, 0.1, key="v11_comp_thr")
+w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, w_ma_default,   0.1, key="v12_w_ma")
+w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, w_rsi_default,  0.1, key="v12_w_rsi")
+w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, w_macd_default, 0.1, key="v12_w_macd")
+w_bb   = st.sidebar.slider("Weight • BB",   0.0, 2.0, w_bb_default,   0.1, key="v12_w_bb") if include_bb else 0.0
+comp_thr = st.sidebar.slider("Composite trigger (enter/exit)", 0.0, 3.0, thr_default, 0.1, key="v12_comp_thr")
 
 st.sidebar.subheader("Risk & Costs")
-allow_short = st.sidebar.toggle("Allow shorts", value=False, key="v11_allow_short")
-cost_bps    = st.sidebar.slider("Trading cost (bps/side)", 0.0, 25.0, 5.0, 0.5, key="v11_cost_bps")
-sl_atr_mult = st.sidebar.slider("Stop • ATR ×", 0.0, 5.0, 2.0, 0.1, key="v11_sl_atr_mult")
-tp_atr_mult = st.sidebar.slider("Target • ATR ×", 0.0, 8.0, 3.0, 0.1, key="v11_tp_atr_mult")
-vol_target  = st.sidebar.slider("Vol targeting (annual)", 0.0, 0.5, 0.0, 0.05, key="v11_vol_target")
+allow_short = st.sidebar.toggle("Allow shorts", value=False, key="v12_allow_short")
+cost_bps    = st.sidebar.slider("Trading cost (bps/side)", 0.0, 25.0, 5.0, 0.5, key="v12_cost_bps")
+sl_atr_mult = st.sidebar.slider("Stop • ATR ×", 0.0, 5.0, 2.0, 0.1, key="v12_sl_atr_mult")
+tp_atr_mult = st.sidebar.slider("Target • ATR ×", 0.0, 8.0, 3.0, 0.1, key="v12_tp_atr_mult")
+vol_target  = st.sidebar.slider("Vol targeting (annual)", 0.0, 0.5, 0.0, 0.05, key="v12_vol_target")
+earn_guard_days = st.sidebar.slider("Earnings guard (± days)", 0, 10, 0, key="v12_earn_guard")
 
 st.sidebar.subheader("Data")
-period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1, key="v11_period_sel")
-interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0, key="v11_interval_sel")
+period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1, key="v12_period_sel")
+interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0, key="v12_interval_sel")
 
 st.sidebar.subheader("Portfolio Guardrails")
-profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, key="v11_profit_target")
-loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5,  key="v11_loss_limit")
+profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, key="v12_profit_target")
+loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5,  key="v12_loss_limit")
 
 # ───────────────────────────── Helpers ─────────────────────────────
 def _map_symbol(sym: str) -> str:
@@ -155,7 +157,7 @@ def rss_news(symbol: str, limit: int = 5) -> list:
 def safe_earnings(symbol: str) -> pd.DataFrame:
     """Return DataFrame with normalized 'earn_date' (UTC)."""
     try:
-        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=8)
+        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=12)
         if isinstance(cal, pd.DataFrame) and not cal.empty:
             df = cal.copy()
             if isinstance(df.index, pd.DatetimeIndex) or (
@@ -204,6 +206,25 @@ def render_next_earnings(symbol: str):
         dt, _row = nxt
         st.info(f"📅 Next Earnings (UTC date): **{dt}**")
 
+def apply_earnings_guard(sig_df: pd.DataFrame, symbol: str, days: int) -> pd.DataFrame:
+    """Zero out Trade within ±days around earnings dates."""
+    if days <= 0 or sig_df.empty:
+        return sig_df
+    er = safe_earnings(symbol)
+    if er.empty or "earn_date" not in er:
+        return sig_df
+    d = sig_df.copy()
+    idx_dates = pd.to_datetime(d.index).tz_localize(None).date if hasattr(d.index, "tz") else pd.to_datetime(d.index).date
+    mask = np.zeros(len(d), dtype=bool)
+    edates = er["earn_date"].dt.tz_convert("UTC").dt.date if er["earn_date"].dt.tz is not None else er["earn_date"].dt.date
+    for e in edates:
+        lo = e - pd.Timedelta(days=days)
+        hi = e + pd.Timedelta(days=days)
+        mask |= (idx_dates >= lo) & (idx_dates <= hi)
+    if "Trade" in d:
+        d.loc[mask, "Trade"] = 0
+    return d
+
 # Analytics helpers
 def rolling_sharpe(ret: pd.Series, window: int = 63, ann: int = 252) -> pd.Series:
     r = ret.rolling(window)
@@ -226,7 +247,7 @@ def calc_beta_alpha(strategy_ret: pd.Series, bench_ret: pd.Series, ann: int = 25
     X = np.column_stack([np.ones_like(x), x])
     coef = np.linalg.lstsq(X, y, rcond=None)[0]
     alpha_daily, beta = coef[0], coef[1]
-    alpha_ann = (1 + alpha_daily) ** ann - 1  # rough compounding
+    alpha_ann = (1 + alpha_daily) ** ann - 1
     return beta, alpha_ann
 
 def trade_ledger(df: pd.DataFrame) -> pd.DataFrame:
@@ -459,15 +480,53 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
     max_dd, sharpe, win_rt, trades, tim, cagr, _ = _stats_from_equity(d, interval)
     return d, max_dd, sharpe, win_rt, trades, tim, cagr
 
+# ─────────── Quick ML for Engine (blending) ───────────
+def _ml_features_from_indicators(ind: pd.DataFrame, rsi_period: int) -> pd.DataFrame:
+    out = pd.DataFrame(index=ind.index)
+    out["ret1"] = ind["Close"].pct_change()
+    out["ret5"] = ind["Close"].pct_change(5)
+    out["vol20"] = ind["Close"].pct_change().rolling(20).std()
+    out["rsi"] = ind.get(f"RSI{rsi_period}", np.nan)
+    out["macd"] = ind.get("MACD", np.nan)
+    out["sto_k"] = ind.get("STO_K", np.nan)
+    out["adx"] = ind.get("ADX", np.nan)
+    if {"BB_U","BB_L"}.issubset(ind.columns):
+        rng = (ind["BB_U"] - ind["BB_L"]).replace(0, np.nan)
+        out["bb_pos"] = (ind["Close"] - ind["BB_L"]) / rng
+    else:
+        out["bb_pos"] = np.nan
+    return out.dropna()
+
+def quick_ml_signal(ind: pd.DataFrame, rsi_period: int, horizon: int = 1,
+                    proba_enter: float = 0.55, proba_exit: float = 0.45) -> pd.Series:
+    """Fast OOS-ish ML: 80/20 split → predict last 20%; earlier bars = 0."""
+    if not SKLEARN_OK:
+        return pd.Series(0, index=ind.index)
+    X = _ml_features_from_indicators(ind, rsi_period)
+    if X.empty or len(X) < 250:
+        return pd.Series(0, index=ind.index)
+    y = (ind["Close"].pct_change(horizon).shift(-horizon) > 0).reindex(X.index).astype(int)
+    data = pd.concat([X, y.rename("y")], axis=1).dropna()
+    split = int(len(data)*0.8)
+    train, test = data.iloc[:split], data.iloc[split:]
+    if train["y"].nunique() < 2:
+        return pd.Series(0, index=ind.index)
+    clf = RandomForestClassifier(n_estimators=300, max_depth=6, random_state=7, n_jobs=-1)
+    clf.fit(train.drop(columns=["y"]), train["y"])
+    proba = pd.Series(clf.predict_proba(test.drop(columns=["y"]))[:,1], index=test.index)
+    sig = pd.Series(0, index=ind.index)
+    sig.loc[proba.index] = np.where(proba >= proba_enter, 1, np.where(proba <= proba_exit, -1, 0))
+    return sig.astype(int)
+
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("🚀 QuantaraX — Composite Signal Engine (v11.1)")
-    st.caption("Actionable, explainable signals with portfolio-grade risk analytics.")
+    st.title("🚀 QuantaraX — Composite Signal Engine (v12)")
+    st.caption("Actionable, explainable signals with portfolio-grade risk analytics — now with blending, guardrails, surfaces, seasonality, stress tests, and one-pagers.")
 
     st.markdown("### Single‐Ticker Backtest")
-    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL", key="v11_inp_engine_ticker").upper()
+    ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL", key="v12_inp_engine_ticker").upper()
 
-    # Live Price (cached loader)
+    # Live Price
     px_live = load_prices(ticker, "5d", "1d")
     if not px_live.empty and "Close" in px_live:
         last_px = _to_float(px_live["Close"].iloc[-1])
@@ -499,25 +558,49 @@ with tab_engine:
     # Earnings (UTC-safe)
     render_next_earnings(ticker)
 
+    # Signal source controls
+    st.markdown("#### Signal Source")
+    signal_src = st.radio("Pick signal type", ["Composite", "ML (quick)", "Blended"], horizontal=True, key="v12_signal_src")
+    ml_enter = st.slider("ML: Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="v12_ml_enter")
+    ml_exit  = st.slider("ML: Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="v12_ml_exit")
+    blend_w  = st.slider("Blend weight (Composite ↔ ML)", 0.0, 1.0, 0.6, 0.05, key="v12_blend_w")
+
     # Benchmark for factor stats
     px_bmk = load_prices(benchmark, period_sel, interval_sel)
 
-    if st.button("▶️ Run Composite Backtest", key="v11_btn_engine_backtest"):
+    if st.button("▶️ Run Backtest", key="v12_btn_engine_backtest"):
         px = load_prices(ticker, period_sel, interval_sel)
         if px.empty:
             st.error(f"No data for '{ticker}'"); st.stop()
 
-        df_raw = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
-        if df_raw.empty:
+        df_ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
+        if df_ind.empty:
             st.error("Not enough data after indicators (try longer period or smaller windows)."); st.stop()
 
-        df_sig = build_composite(
-            df_raw, ma_window, rsi_period,
+        df_comp = build_composite(
+            df_ind, ma_window, rsi_period,
             use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
             include_bb=include_bb, threshold=comp_thr, allow_short=allow_short
         )
-        if df_sig.empty:
-            st.error("Composite could not be built (insufficient rows)."); st.stop()
+
+        # Optional ML and blending
+        df_sig = df_comp.copy()
+        if signal_src in ("ML (quick)", "Blended"):
+            if SKLEARN_OK:
+                ml_sig = quick_ml_signal(df_ind, rsi_period, horizon=1, proba_enter=ml_enter, proba_exit=ml_exit)
+                df_sig["ML_Trade"] = ml_sig.reindex(df_sig.index).fillna(0).astype(int)
+                if signal_src == "ML (quick)":
+                    df_sig["Trade"] = df_sig["ML_Trade"]
+                else:
+                    # Weighted vote: Trade ∈ {-1,0,1}
+                    comp_vote = df_sig["Trade"].astype(float)
+                    ml_vote   = df_sig["ML_Trade"].astype(float)
+                    blended = np.sign(blend_w*comp_vote + (1.0-blend_w)*ml_vote)
+                    df_sig["Trade"] = blended.astype(int)
+            else:
+                st.warning("scikit-learn not installed; falling back to Composite.")
+        # Earnings guard
+        df_sig = apply_earnings_guard(df_sig, ticker, earn_guard_days)
 
         df_c, max_dd, sharpe, win_rt, trades, tim, cagr = backtest(
             df_sig, allow_short=allow_short, cost_bps=cost_bps,
@@ -526,10 +609,10 @@ with tab_engine:
 
         last_trade = int(df_sig["Trade"].tail(1).iloc[0]) if "Trade" in df_sig.columns and not df_sig.empty else 0
         rec = rec_map.get(1 if last_trade>0 else (-1 if last_trade<0 else 0), "🟡 HOLD")
-        st.success(f"**{ticker}**: {rec}")
+        st.success(f"**{ticker}**: {rec}  ({signal_src})")
 
         # Reasoning
-        last = df_sig.tail(1).iloc[0]
+        last = df_comp.tail(1).iloc[0]
         ma_s  = int(last.get("MA_Signal", 0))
         rsi_s = int(last.get("RSI_Signal", 0))
         macd_s= int(last.get("MACD_Signal2", 0))
@@ -545,11 +628,13 @@ with tab_engine:
             st.write(f"- **MA:**  {ma_txt}")
             st.write(f"- **RSI:** {rsi_txt}")
             st.write(f"- **MACD:** {macd_txt}")
-            if include_bb and "BB_Signal" in df_sig.columns:
+            if include_bb and "BB_Signal" in df_comp.columns:
                 bb_s = int(last.get("BB_Signal", 0))
                 bb_txt = {1:"Close under lower band (mean-revert long).",0:"Inside bands.",-1:"Close over upper band (mean-revert short)."}[bb_s]
                 st.write(f"- **BB:** {bb_txt}")
             st.write(f"- **Composite (weighted):** {float(last.get('Composite', 0)):.2f}  (threshold={comp_thr:.1f})")
+            if signal_src in ("ML (quick)", "Blended") and "ML_Trade" in df_sig:
+                st.write("- **ML:** RandomForest on technical factors (80/20 split). For strict OOS, use the ML tab.")
 
         # Performance Cards
         bh_last    = float(df_c["CumBH"].tail(1).iloc[0])  if "CumBH" in df_c and not df_c["CumBH"].empty else 1.0
@@ -597,12 +682,12 @@ with tab_engine:
                 c1, c2 = st.columns(2)
                 c1.metric("Profit Factor", f"{(0 if np.isnan(pf) else pf):.2f}")
                 c2.metric("Kelly (approx)", f"{(0 if np.isnan(kelly) else kelly):.2f}")
-                st.download_button("⬇️ Export Trades (CSV)", ledger.to_csv(index=False), "trades.csv", key="v11_dl_trades")
+                st.download_button("⬇️ Export Trades (CSV)", ledger.to_csv(index=False), "trades.csv", key="v12_dl_trades")
             else:
                 st.info("No closed trades to list yet.")
 
             eq = df_c[["CumBH","CumStrat"]].copy()
-            st.download_button("⬇️ Export Equity (CSV)", eq.to_csv(), "equity.csv", key="v11_dl_equity")
+            st.download_button("⬇️ Export Equity (CSV)", eq.to_csv(), "equity.csv", key="v12_dl_equity")
 
         # Core Plots
         idx = df_c.index
@@ -621,11 +706,108 @@ with tab_engine:
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
+        # —— Seasonality —
+        with st.expander("📆 Seasonality (Month-of-year returns)"):
+            r = px["Close"].pct_change().dropna()
+            if not r.empty:
+                mo = r.groupby(px.index.month).mean()*100
+                figm, axm = plt.subplots(figsize=(8,2.6))
+                axm.bar(mo.index.astype(int), mo.values)
+                axm.set_xticks(range(1,13)); axm.set_title("Average Monthly Return (%)")
+                st.pyplot(figm)
+            else:
+                st.info("Not enough data for seasonality.")
+
+        # —— Parameter Surface —
+        with st.expander("🗺️ Parameter Surface (MA × RSI)"):
+            s1, s2, s3 = st.columns(3)
+            with s1:
+                ma_min = st.number_input("MA min", 5, 60, max(5, ma_window-5), key="v12_surf_mamin")
+                ma_max = st.number_input("MA max", 6, 60, min(60, ma_window+5), key="v12_surf_mamax")
+            with s2:
+                rsi_min = st.number_input("RSI min", 5, 30, max(5, rsi_period-5), key="v12_surf_rsimin")
+                rsi_max = st.number_input("RSI max", 6, 30, min(30, rsi_period+5), key="v12_surf_rsimax")
+            with s3:
+                steps = st.slider("Steps per axis", 3, 10, 5, key="v12_surf_steps")
+            if st.button("Plot Surface", key="v12_btn_surf"):
+                ma_vals  = np.linspace(ma_min, ma_max, steps, dtype=int)
+                rsi_vals = np.linspace(rsi_min, rsi_max, steps, dtype=int)
+                Z = np.full((len(rsi_vals), len(ma_vals)), np.nan)
+                for i, rp in enumerate(rsi_vals):
+                    for j, mw in enumerate(ma_vals):
+                        ind_ = compute_indicators(px, mw, rp, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
+                        if ind_.empty: continue
+                        sig_ = build_composite(
+                            ind_, mw, rp,
+                            use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                            include_bb=include_bb, threshold=comp_thr, allow_short=allow_short
+                        )
+                        # earnings guard for fair compare
+                        sig_ = apply_earnings_guard(sig_, ticker, earn_guard_days)
+                        bt_, *_ = backtest(sig_, allow_short=allow_short, cost_bps=cost_bps, sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult, vol_target=vol_target, interval=interval_sel)
+                        Z[i,j] = (bt_["CumStrat"].iloc[-1]-1)*100 if "CumStrat" in bt_ else np.nan
+                figS, axS = plt.subplots(figsize=(6.5,4.2))
+                im = axS.imshow(Z, origin="lower", aspect="auto", extent=[ma_vals[0], ma_vals[-1], rsi_vals[0], rsi_vals[-1]])
+                axS.set_xlabel("MA window"); axS.set_ylabel("RSI period"); axS.set_title("Strategy % vs (MA, RSI)")
+                plt.colorbar(im, ax=axS, label="% Return")
+                st.pyplot(figS)
+
+        # —— Stress Tester —
+        with st.expander("🧨 Stress Test (gap + vol scaling)"):
+            shock_pct = st.slider("Single-day gap shock (%)", -20.0, 20.0, -8.0, 0.5, key="v12_stress_gap")
+            scale_win = st.slider("Scale volatility last N bars", 20, 200, 60, 5, key="v12_stress_window")
+            vol_scale = st.slider("Vol scale factor", 0.5, 3.0, 1.8, 0.1, key="v12_stress_scale")
+            if st.button("Run Stress", key="v12_btn_stress"):
+                r = df_c["StratRet"].fillna(0).copy()
+                if len(r) > scale_win+5:
+                    r2 = r.copy()
+                    r2.iloc[-scale_win:] = r2.iloc[-scale_win:] * vol_scale
+                    r2.iloc[-scale_win]  = r2.iloc[-scale_win] + shock_pct/100.0
+                    eq_base = (1+r).cumprod()
+                    eq_stress = (1+r2).cumprod()
+                    figT, axT = plt.subplots(figsize=(8,3))
+                    axT.plot(eq_base.index, eq_base.values, label="Base")
+                    axT.plot(eq_stress.index, eq_stress.values, label="Stress")
+                    axT.legend(); axT.set_title("Stress Test — Equity")
+                    st.pyplot(figT)
+                else:
+                    st.info("Not enough data for stress test.")
+
+        # —— One-Pager —
+        with st.expander("🧾 Export One-Pager"):
+            notes = st.text_area("Add notes (optional)", "", key="v12_notes")
+            if st.button("Download One-Pager (Markdown)", key="v12_btn_onepager"):
+                btxt = StringIO()
+                print(f"# QuantaraX One-Pager — {ticker}", file=btxt)
+                print(f"\n**Mode:** {mode} | **Signal:** {signal_src}", file=btxt)
+                print(f"\n**Settings**", file=btxt)
+                print(f"- MA={ma_window}, RSI={rsi_period}, MACD=({macd_fast},{macd_slow},{macd_signal}), BB={include_bb}", file=btxt)
+                print(f"- Weights: MA={w_ma}, RSI={w_rsi}, MACD={w_macd}, BB={w_bb}, Threshold={comp_thr}", file=btxt)
+                print(f"- Risk: allow_short={allow_short}, cost_bps={cost_bps}, ATR SL={sl_atr_mult}, ATR TP={tp_atr_mult}, vol_target={vol_target}", file=btxt)
+                print(f"- Earnings guard: ±{earn_guard_days}d", file=btxt)
+                # metrics
+                print("\n**Key Metrics**", file=btxt)
+                print(f"- CAGR: {(0 if np.isnan(cagr) else cagr):.2f}%", file=btxt)
+                print(f"- Sharpe: {(0 if np.isnan(sharpe) else sharpe):.2f}", file=btxt)
+                print(f"- Max Drawdown: {max_dd:.2f}%", file=btxt)
+                print(f"- Win Rate: {win_rt:.1f}%", file=btxt)
+                print(f"- Trades: {trades} | Time in Market: {tim:.1f}%", file=btxt)
+                print(f"- Strategy Return: {(strat_last-1)*100:.2f}% | Buy&Hold: {(bh_last-1)*100:.2f}%", file=btxt)
+                # earnings
+                nxt = next_earnings_date(ticker)
+                if nxt:
+                    print(f"\n**Next Earnings (UTC):** {nxt[0]}", file=btxt)
+                if notes:
+                    print("\n**Notes**", file=btxt)
+                    print(notes, file=btxt)
+                md = btxt.getvalue()
+                st.download_button("⬇️ Save .md", md, f"quantarax_{ticker}_onepager.md", key="v12_dl_onepager")
+
     # ── Tools ──
     st.markdown("---")
     with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
-        mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="v11_inp_mtf_symbol").upper()
-        if st.button("🔍 Check MTF", key="v11_btn_mtf"):
+        mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="v12_inp_mtf_symbol").upper()
+        if st.button("🔍 Check MTF", key="v12_btn_mtf"):
             try:
                 d1 = compute_indicators(
                     load_prices(mtf_symbol, "1y", "1d"),
@@ -659,15 +841,15 @@ with tab_engine:
                 st.error(f"MTF error: {e}")
 
     with st.expander("🧪 Walk-Forward Optimization (OOS)", expanded=False):
-        wf_symbol = st.text_input("Symbol (WFO)", value=ticker or "AAPL", key="v11_inp_wfo_symbol").upper()
+        wf_symbol = st.text_input("Symbol (WFO)", value=ticker or "AAPL", key="v12_inp_wfo_symbol").upper()
         c1c, c2c = st.columns(2)
         with c1c:
-            ins_bars = st.number_input("In-sample bars", 60, 252*3, 126, 1, key="v11_wfo_ins")
-            oos_bars = st.number_input("OOS bars", 20, 252, 63, 1, key="v11_wfo_oos")
+            ins_bars = st.number_input("In-sample bars", 60, 252*3, 126, 1, key="v12_wfo_ins")
+            oos_bars = st.number_input("OOS bars", 20, 252, 63, 1, key="v12_wfo_oos")
         with c2c:
-            w_thr = st.slider("Composite trigger (WFO)", 0.0, 3.0, 1.0, 0.1, key="v11_wfo_thr")
-            wf_allow_short = st.toggle("Allow shorts (WFO)", value=False, key="v11_wfo_short")
-        if st.button("🏃 Run Walk-Forward", key="v11_btn_wfo"):
+            w_thr = st.slider("Composite trigger (WFO)", 0.0, 3.0, 1.0, 0.1, key="v12_wfo_thr")
+            wf_allow_short = st.toggle("Allow shorts (WFO)", value=False, key="v12_wfo_short")
+        if st.button("🏃 Run Walk-Forward", key="v12_btn_wfo"):
             try:
                 px_all = load_prices(wf_symbol, "2y", "1d")
                 if px_all.empty: st.warning("No data for WFO."); st.stop()
@@ -751,8 +933,8 @@ with tab_engine:
     # Batch Backtest
     st.markdown("---")
     st.markdown("### Batch Backtest")
-    batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ", key="v11_ta_batch").upper()
-    if st.button("▶️ Run Batch Backtest", key="v11_btn_batch"):
+    batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ", key="v12_ta_batch").upper()
+    if st.button("▶️ Run Batch Backtest", key="v12_btn_batch"):
         perf=[]
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
             px = load_prices(t, period_sel, interval_sel)
@@ -762,7 +944,7 @@ with tab_engine:
             df_tc = build_composite(df_t, ma_window, rsi_period,
                                     use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
                                     include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
-            if df_tc.empty: continue
+            df_tc = apply_earnings_guard(df_tc, t, earn_guard_days)
             bt, md, sh, wr, trd, tim, cagr = backtest(df_tc, allow_short=allow_short, cost_bps=cost_bps,
                                                       sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
                                                       vol_target=vol_target, interval=interval_sel)
@@ -785,7 +967,7 @@ with tab_engine:
         if perf:
             df_perf = pd.DataFrame(perf).set_index("Ticker").sort_values("Strategy %", ascending=False)
             st.dataframe(df_perf, use_container_width=True)
-            st.download_button("⬇️ Download CSV", df_perf.to_csv(), "batch.csv", key="v11_dl_batch")
+            st.download_button("⬇️ Download CSV", df_perf.to_csv(), "batch.csv", key="v12_dl_batch")
         else:
             st.error("No valid data for batch tickers.")
 
@@ -794,28 +976,15 @@ with tab_ml:
     st.title("🧠 ML Lab — Probabilistic Signals")
     if not SKLEARN_OK:
         st.warning("scikit-learn not installed. Run: pip install scikit-learn")
-    symbol = st.text_input("Symbol (ML)", value="AAPL", key="v11_inp_ml_symbol").upper()
-    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="v11_ml_horizon")
-    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="v11_ml_train_frac")
-    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="v11_ml_p_enter")
-    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="v11_ml_p_exit")
-    run_ml = st.button("🤖 Train & Backtest", key="v11_btn_ml_run")
+    symbol = st.text_input("Symbol (ML)", value="AAPL", key="v12_inp_ml_symbol").upper()
+    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="v12_ml_horizon")
+    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="v12_ml_train_frac")
+    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="v12_ml_p_enter")
+    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="v12_ml_p_exit")
+    run_ml = st.button("🤖 Train & Backtest", key="v12_btn_ml_run")
 
     def _ml_features(d: pd.DataFrame) -> pd.DataFrame:
-        out = pd.DataFrame(index=d.index)
-        out["ret1"] = d["Close"].pct_change()
-        out["ret5"] = d["Close"].pct_change(5)
-        out["vol20"] = d["Close"].pct_change().rolling(20).std()
-        out["rsi"] = d.get(f"RSI{rsi_period}", np.nan)
-        out["macd"] = d.get("MACD", np.nan)
-        out["sto_k"] = d.get("STO_K", np.nan)
-        out["adx"] = d.get("ADX", np.nan)
-        if {"BB_U","BB_L"}.issubset(d.columns):
-            rng = (d["BB_U"] - d["BB_L"]).replace(0, np.nan)
-            out["bb_pos"] = (d["Close"] - d["BB_L"]) / rng
-        else:
-            out["bb_pos"] = np.nan
-        return out.dropna()
+        return _ml_features_from_indicators(d, rsi_period)
 
     if run_ml:
         try:
@@ -879,9 +1048,9 @@ with tab_scan:
     st.title("📡 Universe Scanner — Composite + (optional) ML")
     universe = st.text_area("Tickers (comma-separated)",
                             "AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, NFLX, SPY, QQQ",
-                            key="v11_ta_scan_universe").upper()
-    use_ml_scan = st.toggle("Include ML probability (needs scikit-learn)", value=False, key="v11_tg_ml_scan")
-    run_scan = st.button("🔎 Scan", key="v11_btn_scan")
+                            key="v12_ta_scan_universe").upper()
+    use_ml_scan = st.toggle("Include ML probability (needs scikit-learn)", value=False, key="v12_tg_ml_scan")
+    run_scan = st.button("🔎 Scan", key="v12_btn_scan")
 
     if run_scan:
         rows=[]
@@ -894,6 +1063,7 @@ with tab_scan:
                 sig = build_composite(ind, ma_window, rsi_period,
                                       use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
                                       include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
+                sig = apply_earnings_guard(sig, t, earn_guard_days)
                 if sig.empty: continue
                 comp = float(sig["Composite"].tail(1).iloc[0]) if "Composite" in sig else 0.0
                 rec = rec_map.get(int(np.sign(comp)), "🟡 HOLD")
@@ -919,11 +1089,40 @@ with tab_scan:
         else:
             st.info("No results. Check tickers or increase history.")
 
+    # Correlation Heatmap
+    st.markdown("---")
+    st.markdown("### 🔗 Correlation Heatmap (daily returns)")
+    if st.button("Build Correlation", key="v12_btn_corr"):
+        tickers = [t.strip() for t in st.session_state.get("v12_ta_scan_universe","").split(",") if t.strip()]
+        if len(tickers) >= 2:
+            rets = []
+            valid = []
+            for t in tickers:
+                px = load_prices(t, "1y", "1d")
+                if px.empty: continue
+                valid.append(t); rets.append(px["Close"].pct_change().rename(t))
+            if valid:
+                R = pd.concat(rets, axis=1).dropna(how="any")
+                if not R.empty and len(R.columns) >= 2:
+                    C = R.corr()
+                    st.dataframe(C.style.format("{:.2f}"), use_container_width=True)
+                    figC, axC = plt.subplots(figsize=(6,5))
+                    im = axC.imshow(C.values, origin="lower", aspect="equal")
+                    axC.set_xticks(range(len(C.columns))); axC.set_xticklabels(C.columns, rotation=45, ha="right")
+                    axC.set_yticks(range(len(C.index)));   axC.set_yticklabels(C.index)
+                    plt.colorbar(im, ax=axC, label="Corr")
+                    axC.set_title("Correlation Heatmap")
+                    st.pyplot(figC)
+                else:
+                    st.info("Not enough overlapping data.")
+        else:
+            st.info("Provide ≥2 tickers in the text box above.")
+
 # ───────────────────────────── REGIMES ─────────────────────────────
 with tab_regime:
     st.title("📉 Regime Detection — Vol/Momentum Clusters")
-    sym = st.text_input("Symbol (Regime)", value="SPY", key="v11_inp_regime_symbol").upper()
-    run_rg = st.button("Cluster Regimes", key="v11_btn_regimes")
+    sym = st.text_input("Symbol (Regime)", value="SPY", key="v12_inp_regime_symbol").upper()
+    run_rg = st.button("Cluster Regimes", key="v12_btn_regimes")
 
     if run_rg:
         try:
@@ -963,8 +1162,8 @@ with tab_port:
     st.title("💼 Portfolio — Optimizers & Monte Carlo")
 
     st.subheader("⚖️ Risk Parity Optimizer")
-    opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="v11_inp_opt_tickers").upper()
-    if st.button("🧮 Optimize (Risk Parity)", key="v11_btn_opt_rp"):
+    opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="v12_inp_opt_tickers").upper()
+    if st.button("🧮 Optimize (Risk Parity)", key="v12_btn_opt_rp"):
         try:
             tickers = [t.strip() for t in opt_tickers.split(",") if t.strip()]
             rets = []; valid = []
@@ -998,9 +1197,11 @@ with tab_port:
             st.error(f"Optimizer error: {e}")
 
     st.subheader("🎲 Monte Carlo (Bootstrap) of Strategy Returns")
-    mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="v11_inp_mc_symbol").upper()
-    n_paths = st.slider("Paths", 200, 3000, 800, 100, key="v11_mc_paths")
-    run_mc = st.button("Run Monte Carlo", key="v11_btn_mc")
+    mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="v12_inp_mc_symbol").upper()
+    n_paths = st.slider("Paths", 200, 3000, 800, 100, key="v12_mc_paths")
+    mc_mode = st.selectbox("Resampling", ["IID (simple)", "Block bootstrap"], index=1, key="v12_mc_mode")
+    block_len = st.slider("Block length (if block bootstrap)", 5, 60, 20, key="v12_mc_block")
+    run_mc = st.button("Run Monte Carlo", key="v12_btn_mc")
 
     if run_mc:
         try:
@@ -1017,10 +1218,26 @@ with tab_port:
                 st.warning("Not enough strategy bars to bootstrap."); st.stop()
             N = len(r)
             endings = []
-            for _ in range(int(n_paths)):
-                samp = np.random.choice(r, size=N, replace=True)
-                eq = (1 + pd.Series(samp)).cumprod().iloc[-1]
-                endings.append(eq)
+            if mc_mode == "IID (simple)":
+                for _ in range(int(n_paths)):
+                    samp = np.random.choice(r, size=N, replace=True)
+                    eq = (1 + pd.Series(samp)).cumprod().iloc[-1]
+                    endings.append(eq)
+            else:
+                # block bootstrap
+                bl = int(block_len)
+                idxs = np.arange(N)
+                for _ in range(int(n_paths)):
+                    seq = []
+                    k = 0
+                    while k < N:
+                        start = np.random.randint(0, max(1, N - bl))
+                        chunk = r[start:start+bl]
+                        seq.extend(chunk)
+                        k += bl
+                    seq = np.array(seq[:N])
+                    eq = (1 + pd.Series(seq)).cumprod().iloc[-1]
+                    endings.append(eq)
             endings = np.array(endings)
             pct = (np.percentile(endings, [5, 25, 50, 75, 95]) - 1) * 100
             c1,c2,c3,c4,c5 = st.columns(5)
@@ -1034,15 +1251,20 @@ with tab_port:
 
 # ───────────────────────────── HELP ─────────────────────────────
 with tab_help:
-    st.header("How to use QuantaraX Pro (v11.1)")
+    st.header("How to use QuantaraX Pro (v12)")
     st.markdown(r"""
-**Fixes & upgrades in v11.1**
-- ✅ WFO + MTF now pass **keyword** args to `build_composite` (no more positional-arg error).
-- Investor-ready analytics (beta/alpha, rolling Sharpe, drawdown, trade ledger, exports) remain.
+**Big upgrades in v12**
+- Signal **source selector**: Composite, Quick-ML, or Blended (weighted voting).
+- **Earnings guard**: auto-flat ±N days around earnings for cleaner risk.
+- **Seasonality**, **Parameter Surface**, **Stress Tester**, **One-Pager** export.
+- **Correlation heatmap** for universe context.
+- **Block-bootstrap MC** for more realistic paths.
 
-**Fast start:**
-1. Choose a preset, pick your ticker, and click **Run Composite Backtest**.
-2. Read **Why This Signal?** to understand drivers.
-3. Switch to **Investor mode** for factor stats and exports.
-4. Use **Batch Backtest** and **Scanner** to explore more names.
+**Tips**
+- Use **Blended** when Composite & ML align (check MTF + ML Lab for OOS).
+- Turn on **Earnings guard** for single-names around reports.
+- Use **Parameter Surface** to avoid "knife-edge" settings.
+- Export the **One-Pager** to share with teammates/investors.
+
+Everything degrades gracefully if a data source times out or ML isn’t available.
 """)
