@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro (v11, investor-ready)
+# app.py — QuantaraX Pro (v11.1, investor-ready, WFO+MTF fix)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
@@ -28,7 +28,7 @@ except Exception:
     SKLEARN_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v11", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v11.1", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
@@ -461,20 +461,19 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("🚀 QuantaraX — Composite Signal Engine (v11)")
-
+    st.title("🚀 QuantaraX — Composite Signal Engine (v11.1)")
     st.caption("Actionable, explainable signals with portfolio-grade risk analytics.")
 
     st.markdown("### Single‐Ticker Backtest")
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL", key="v11_inp_engine_ticker").upper()
 
-    # Live Price (cached loader, no direct 1d single call)
+    # Live Price (cached loader)
     px_live = load_prices(ticker, "5d", "1d")
     if not px_live.empty and "Close" in px_live:
         last_px = _to_float(px_live["Close"].iloc[-1])
         st.subheader(f"💲 Last Close: ${last_px:.2f}")
 
-    # News (safe → RSS fallback)
+    # News
     news = safe_get_news(ticker)
     if news:
         st.markdown("#### 📰 Recent News & Sentiment")
@@ -497,10 +496,10 @@ with tab_engine:
         else:
             st.info("No recent news found.")
 
-    # Earnings (robust, UTC-safe)
+    # Earnings (UTC-safe)
     render_next_earnings(ticker)
 
-    # Quick benchmark download for factor stats later
+    # Benchmark for factor stats
     px_bmk = load_prices(benchmark, period_sel, interval_sel)
 
     if st.button("▶️ Run Composite Backtest", key="v11_btn_engine_backtest"):
@@ -565,11 +564,9 @@ with tab_engine:
 
         st.markdown(f"- **Buy & Hold:** {(bh_last-1)*100:.2f}%  \n- **Strategy:** {(strat_last-1)*100:.2f}%")
 
-        # Investor mode: factor stats, rolling sharpe, drawdown, trade ledger, exports
+        # Investor mode extras
         if mode == "Investor (advanced)":
             st.markdown("#### 📊 Advanced Analytics")
-
-            # Factor stats vs benchmark
             if not px_bmk.empty:
                 df_align = pd.DataFrame(index=df_c.index)
                 df_align["strat"] = df_c["StratRet"].fillna(0.0)
@@ -581,20 +578,17 @@ with tab_engine:
             else:
                 st.info("Benchmark unavailable; factor stats skipped.")
 
-            # Rolling Sharpe
             rs = rolling_sharpe(df_c["StratRet"].replace([np.inf,-np.inf], np.nan).fillna(0.0))
             fig_rs, ax_rs = plt.subplots(figsize=(9,2.8))
             ax_rs.plot(rs.index, rs.values); ax_rs.set_title("Rolling Sharpe (63 bars)"); ax_rs.axhline(0, ls="--", alpha=0.5)
             st.pyplot(fig_rs)
 
-            # Drawdown
             dd = drawdown_curve(df_c["CumStrat"].replace(0, np.nan).fillna(method="ffill"))
             fig_dd, ax_dd = plt.subplots(figsize=(9,2.8))
             ax_dd.fill_between(dd.index, dd.values, 0, step=None, alpha=0.5)
             ax_dd.set_title("Drawdown (%)"); ax_dd.set_ylim(dd.min()*1.1, 0)
             st.pyplot(fig_dd)
 
-            # Trade ledger
             ledger = trade_ledger(df_c)
             if not ledger.empty:
                 st.dataframe(ledger.tail(15), use_container_width=True)
@@ -607,7 +601,6 @@ with tab_engine:
             else:
                 st.info("No closed trades to list yet.")
 
-            # Export equity
             eq = df_c[["CumBH","CumStrat"]].copy()
             st.download_button("⬇️ Export Equity (CSV)", eq.to_csv(), "equity.csv", key="v11_dl_equity")
 
@@ -634,14 +627,26 @@ with tab_engine:
         mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="v11_inp_mtf_symbol").upper()
         if st.button("🔍 Check MTF", key="v11_btn_mtf"):
             try:
-                d1 = compute_indicators(load_prices(mtf_symbol, "1y", "1d"),
-                                        ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-                dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"),
-                                        ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                d1 = compute_indicators(
+                    load_prices(mtf_symbol, "1y", "1d"),
+                    ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True
+                )
+                dH = compute_indicators(
+                    load_prices(mtf_symbol, "30d", "1h"),
+                    ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True
+                )
                 if d1.empty or dH.empty:
                     st.warning("Insufficient data for MTF."); st.stop()
-                c1 = build_composite(d1, ma_window, rsi_period, True, 1.0,1.0,1.0,0.5, True, 1.0)
-                cH = build_composite(dH, ma_window, rsi_period, True, 1.0,1.0,1.0,0.5, True, 1.0)
+                c1 = build_composite(
+                    d1, ma_window, rsi_period,
+                    use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                    include_bb=True, threshold=1.0, allow_short=allow_short
+                )
+                cH = build_composite(
+                    dH, ma_window, rsi_period,
+                    use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                    include_bb=True, threshold=1.0, allow_short=allow_short
+                )
                 daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
                 st.write(f"**Daily composite:** {daily:+.2f}")
                 st.write(f"**Hourly composite:** {hourly:+.2f}")
@@ -685,7 +690,11 @@ with tab_engine:
                                         for s in sig_list:
                                             ins_ind = compute_indicators(ins, mw, rp, mf, ms, s, use_bb=True)
                                             if ins_ind.empty: continue
-                                            ins_sig = build_composite(ins_ind, mw, rp, True, w_ma, w_rsi, w_macd, w_bb, True, threshold, allow_short)
+                                            ins_sig = build_composite(
+                                                ins_ind, mw, rp,
+                                                use_weighted=True, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                                include_bb=True, threshold=threshold, allow_short=allow_short
+                                            )
                                             ins_bt, md, sh, *_ = backtest(ins_sig, allow_short=allow_short, cost_bps=cost_bps)
                                             perf = (ins_bt["CumStrat"].iloc[-1]-1)*100 if "CumStrat" in ins_bt else -1e9
                                             score = perf - abs(md)
@@ -698,7 +707,11 @@ with tab_engine:
                         oos_ind = compute_indicators(oos, mw, rp, mf, ms, s, use_bb=True)
                         if oos_ind.empty:
                             i += oos_bars; continue
-                        oos_sig = build_composite(oos_ind, mw, rp, True, w_ma, w_rsi, w_macd, w_bb, True, threshold, allow_short)
+                        oos_sig = build_composite(
+                            oos_ind, mw, rp,
+                            use_weighted=True, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                            include_bb=True, threshold=threshold, allow_short=allow_short
+                        )
                         oos_bt, mo_dd, mo_sh, *_ = backtest(oos_sig, allow_short=allow_short, cost_bps=cost_bps)
                         if "CumStrat" in oos_bt:
                             oos_curves.append(oos_bt[["CumStrat"]].rename(columns={"CumStrat":"Equity"}))
@@ -1021,21 +1034,15 @@ with tab_port:
 
 # ───────────────────────────── HELP ─────────────────────────────
 with tab_help:
-    st.header("How to use QuantaraX Pro (v11)")
+    st.header("How to use QuantaraX Pro (v11.1)")
     st.markdown(r"""
-**What’s new for v11 (investor-ready):**
-- **Presets** (Trend / Mean-Revert / Balanced) to match trader style instantly.
-- **Investor mode** adds factor stats (beta/alpha vs benchmark), trade ledger, rolling Sharpe & drawdown.
-- **Position sizing hints** via Profit Factor & Kelly approximate.
-- **Exports** for trades and equity to share in investor memos.
-- **Hardened internals** for earnings dates (UTC-safe), multi-timeframe checks, and news fallbacks.
+**Fixes & upgrades in v11.1**
+- ✅ WFO + MTF now pass **keyword** args to `build_composite` (no more positional-arg error).
+- Investor-ready analytics (beta/alpha, rolling Sharpe, drawdown, trade ledger, exports) remain.
 
 **Fast start:**
 1. Choose a preset, pick your ticker, and click **Run Composite Backtest**.
-2. Read the **Why This Signal?** expander to understand buy/sell drivers.
-3. Flip to **Investor mode** (sidebar) to see risk stats and export artifacts.
-4. Use **Batch Backtest** for quick screening and **Scanner** for a broader sweep.
-5. Move to **Portfolio** to allocate with risk parity and stress via Monte Carlo.
-
-**Notes:** All network calls are guarded. If a provider times out, the app degrades gracefully.
+2. Read **Why This Signal?** to understand drivers.
+3. Switch to **Investor mode** for factor stats and exports.
+4. Use **Batch Backtest** and **Scanner** to explore more names.
 """)
