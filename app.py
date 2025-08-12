@@ -165,14 +165,14 @@ def safe_earnings(symbol: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 def render_next_earnings(symbol: str) -> None:
-    """Show nearest future earnings in UTC; else last past date."""
+    """Show nearest future earnings in UTC; else last past date (fixed tz handling)."""
     er = safe_earnings(symbol)
     if er.empty or "earn_date" not in er.columns:
         st.info("📅 Next Earnings: unavailable.")
         return
     er = er.dropna(subset=["earn_date"]).copy()
     er["earn_date"] = pd.to_datetime(er["earn_date"], errors="coerce", utc=True)
-    now = pd.Timestamp.utcnow().tz_localize("UTC")
+    now = pd.Timestamp.now(tz="UTC")  # ← fixed: no tz_localize on tz-aware
     future = er[er["earn_date"] >= now]
     if not future.empty:
         dt = future.sort_values("earn_date").iloc[0]["earn_date"]
@@ -496,7 +496,7 @@ with tab_engine:
         if st.button("🔍 Check MTF", key="btn_mtf"):
             try:
                 d_daily  = load_prices(mtf_symbol, "1y",  "1d")
-                d_hourly = load_prices(mtf_symbol, "60d", "1h")  # more intraday history
+                d_hourly = load_prices(mtf_symbol, "60d", "1h")
                 d1 = compute_indicators(d_daily,  ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
                 dH = compute_indicators(d_hourly, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
                 if d1.empty or dH.empty:
