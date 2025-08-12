@@ -1,7 +1,25 @@
-# app.py — QuantaraX Pro (v5.1)
+# app.py — QuantaraX Ultra (v6)
 # ---------------------------------------------------------------------------------
-# pip install: streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
-# Optional: pip install hmmlearn
+# Core requirements:
+#   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
+#
+# Optional (enables advanced tabs automatically if present):
+#   optuna scipy statsmodels hmmlearn
+#
+# Suggested requirements.txt:
+#   streamlit
+#   yfinance
+#   pandas
+#   numpy
+#   matplotlib
+#   feedparser
+#   vaderSentiment
+#   scikit-learn
+#   # Optional power-ups:
+#   optuna
+#   scipy
+#   statsmodels
+#   hmmlearn
 
 import math
 import datetime as dt
@@ -36,12 +54,35 @@ except Exception:
     HMM_OK = False
     GaussianHMM = None
 
+# Optional Optuna
+try:
+    import optuna
+    OPTUNA_OK = True
+except Exception:
+    OPTUNA_OK = False
+    optuna = None
+
+# Optional SciPy (HRP)
+try:
+    from scipy.cluster.hierarchy import linkage, leaves_list
+    from scipy.spatial.distance import squareform
+    SCIPY_OK = True
+except Exception:
+    SCIPY_OK = False
+
+# Optional Statsmodels (cointegration)
+try:
+    from statsmodels.tsa.stattools import coint
+    STATSM_OK = True
+except Exception:
+    STATSM_OK = False
+
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v5.1", layout="wide")
+st.set_page_config(page_title="QuantaraX Ultra v6", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
-# Sample past FOMC dates
+# Sample past FOMC dates (demo)
 FOMC_DATES = [
     dt.date(2024, 1, 31), dt.date(2024, 3, 20), dt.date(2024, 5, 1),
     dt.date(2024, 6, 12), dt.date(2024, 7, 31), dt.date(2024, 9, 18),
@@ -60,7 +101,7 @@ def _map_symbol(sym: str) -> str:
 @st.cache_data(show_spinner=False, ttl=900)
 def load_prices(symbol: str, period: str, interval: str) -> pd.DataFrame:
     sym = _map_symbol(symbol)
-    df = yf.download(sym, period=period, interval=interval, auto_adjust=False, progress=False)
+    df = yf.download(sym, period=period, interval=interval, auto_adjust=True, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
     return df.dropna()
@@ -71,8 +112,10 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
     if d.empty or not set(["Open","High","Low","Close"]).issubset(d.columns):
         return pd.DataFrame()
 
+    # MA
     d[f"MA{ma_w}"] = d["Close"].rolling(ma_w).mean()
 
+    # RSI (EMA-based)
     chg = d["Close"].diff()
     up, dn = chg.clip(lower=0), -chg.clip(upper=0)
     ema_up   = up.ewm(com=rsi_p-1, adjust=False).mean()
@@ -80,28 +123,33 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
     rs = ema_up / ema_down.replace(0, np.nan)
     d[f"RSI{rsi_p}"] = 100 - 100 / (1 + rs)
 
+    # MACD
     ema_f = d["Close"].ewm(span=mf, adjust=False).mean()
     ema_s = d["Close"].ewm(span=ms, adjust=False).mean()
     macd_line = ema_f - ema_s
     d["MACD"] = macd_line
     d["MACD_Signal"] = macd_line.ewm(span=sig, adjust=False).mean()
 
+    # ATR
     pc = d["Close"].shift(1)
     tr = pd.concat([(d["High"]-d["Low"]).abs(), (d["High"]-pc).abs(), (d["Low"]-pc).abs()], axis=1).max(axis=1)
     d["TR"] = tr
     d["ATR"] = tr.ewm(alpha=1/14, adjust=False).mean()
 
+    # Bollinger
     if use_bb:
         w = 20; k = 2.0
         mid = d["Close"].rolling(w).mean()
         sd  = d["Close"].rolling(w).std(ddof=0)
         d["BB_M"], d["BB_U"], d["BB_L"] = mid, mid + k*sd, mid - k*sd
 
+    # Stochastic
     klen = 14
     ll = d["Low"].rolling(klen).min(); hh = d["High"].rolling(klen).max()
     d["STO_K"] = 100 * (d["Close"] - ll) / (hh - ll)
     d["STO_D"] = d["STO_K"].rolling(3).mean()
 
+    # ADX (simplified Wilder)
     adx_n = 14
     up_move = d["High"].diff()
     dn_move = -d["Low"].diff()
@@ -113,6 +161,7 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)).replace([np.inf,-np.inf], np.nan) * 100
     d["ADX"] = dx.ewm(alpha=1/adx_n, adjust=False).mean()
 
+    # Donchian & Keltner
     dc_n = 20
     d["DC_U"] = d["High"].rolling(dc_n).max()
     d["DC_L"] = d["Low"].rolling(dc_n).min()
@@ -157,6 +206,7 @@ def build_composite(df: pd.DataFrame, ma_w: int, rsi_p: int,
     comp = (w_ma*ma_sig + w_rsi*rsi_sig + w_macd*macd_sig2 + (w_bb*bb_sig if include_bb else 0)) if use_weighted \
            else (ma_sig + rsi_sig + macd_sig2)
 
+    # Adaptive threshold & size
     vol = (d["ATR"] / d["Close"]).clip(lower=1e-9)
     z = (vol - vol.rolling(100).mean()) / (vol.rolling(100).std() + 1e-9)
     z = z.clip(-1, 1).fillna(0)
@@ -201,7 +251,7 @@ def apply_event_flatten(df: pd.DataFrame, dates: List[dt.date],
         return df2
     d = df.copy()
     mask = pd.Series(0, index=d.index)
-    idx_dates = [i.date() if isinstance(i, (pd.Timestamp, pd.DatetimeIndex)) else pd.Timestamp(i).date() for i in d.index]
+    idx_dates = [pd.Timestamp(i).date() for i in d.index]
     idx_series = pd.Series(idx_dates, index=d.index)
     date_set = set()
     for ed in dates:
@@ -313,7 +363,7 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
     max_dd, sharpe, win_rt, trades, tim, cagr, last_cum = _stats_from_equity(d, interval)
     return d, max_dd, sharpe, win_rt, trades, tim, cagr
 
-# ───────────────────────────── Sidebar & Tabs ─────────────────────────────
+# ───────────────────────────── Sidebar (unique keys) ─────────────────────────────
 st.sidebar.header("Global Controls")
 
 DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9)
@@ -325,7 +375,7 @@ if st.sidebar.button("🔄 Reset to defaults", key="btn_reset_defaults"):
     for k, v in DEFAULTS.items():
         st.session_state[k] = v
 
-# Indicator params
+# Indicators
 st.sidebar.subheader("Indicators")
 ma_window   = st.sidebar.slider("MA window",      5, 60, st.session_state["ma_window"],   key="sl_ma_window")
 rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="sl_rsi_period")
@@ -333,7 +383,7 @@ macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_
 macd_slow   = st.sidebar.slider("MACD slow span", 20, 50, st.session_state["macd_slow"],  key="sl_macd_slow")
 macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="sl_macd_signal")
 
-# Composite weights
+# Composite
 st.sidebar.subheader("Composite (Adaptive v2)")
 use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="tg_use_weighted")
 include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True, key="tg_include_bb")
@@ -372,14 +422,14 @@ st.sidebar.subheader("Portfolio Guardrails")
 profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, key="sl_profit_target")
 loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5, key="sl_loss_limit")
 
-# Tabs
-(tab_engine, tab_ml, tab_scan, tab_regime, tab_port, tab_help) = st.tabs(
-    ["🚀 Engine","🧠 ML Lab","📡 Scanner","📉 Regimes","💼 Portfolio","❓ Help"]
+# ───────────────────────────── Tabs ─────────────────────────────
+(tab_engine, tab_ml, tab_scan, tab_regime, tab_port, tab_opt, tab_exec, tab_pairs, tab_help) = st.tabs(
+    ["🚀 Engine","🧠 ML Lab","📡 Scanner","📉 Regimes","💼 Portfolio","🛠️ Auto-Optimize","🕹️ Execution","🔗 Pairs","❓ Help"]
 )
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("🚀 QuantaraX — Composite Signal Engine (v5.1)")
+    st.title("🚀 QuantaraX — Composite Signal Engine (v6)")
 
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL", key="ti_engine_ticker").upper().strip()
     if ticker:
@@ -730,12 +780,57 @@ with tab_regime:
             st.error(f"Regime error: {e}")
 
 # ───────────────────────────── PORTFOLIO ─────────────────────────────
-with tab_port:
-    st.title("💼 Portfolio — Optimizers, Studio & Monte Carlo")
+def _hrp_weights(cov: pd.DataFrame) -> pd.Series:
+    """Hierarchical Risk Parity (requires SciPy). Falls back to equal risk if SciPy missing."""
+    cols = list(cov.columns)
+    if not SCIPY_OK:
+        w = np.ones(len(cols)); w = w / w.sum()
+        return pd.Series(w, index=cols, name="HRP Weight")
 
-    st.subheader("⚖️ Risk Parity Optimizer")
+    corr = cov.copy()
+    for i in corr.columns:
+        for j in corr.columns:
+            if i == j:
+                corr.loc[i,j] = 1.0
+            else:
+                corr.loc[i,j] = cov.loc[i,j] / math.sqrt(cov.loc[i,i] * cov.loc[j,j])
+
+    dist = np.sqrt(0.5 * (1 - corr.clip(-1,1)))
+    Z = linkage(squareform(dist.values, checks=False), method="single")
+    order = leaves_list(Z)
+    ordered = [cols[i] for i in order]
+    cov_ = cov.loc[ordered, ordered].values
+
+    def _hrp(cov_mat, names):
+        if len(names) == 1:
+            return pd.Series([1.0], index=names)
+        split = len(names)//2
+        left_names = names[:split]; right_names = names[split:]
+        cov_l = cov_mat[:split, :split]; cov_r = cov_mat[split:, split:]
+
+        w_l = _hrp(cov_l, left_names)
+        w_r = _hrp(cov_r, right_names)
+
+        var_l = float(np.dot(w_l.values, cov_l @ w_l.values))
+        var_r = float(np.dot(w_r.values, cov_r @ w_r.values))
+        alpha = 1 - var_l / (var_l + var_r + 1e-12)
+
+        w = pd.concat([w_l * alpha, w_r * (1 - alpha)])
+        return w
+
+    w_ord = _hrp(cov_, ordered)
+    # Reindex to original order
+    w = w_ord.reindex(cols)
+    w = w / w.sum()
+    w.name = "HRP Weight"
+    return w
+
+with tab_port:
+    st.title("💼 Portfolio — HRP, BL, Studio & Monte Carlo")
+
+    st.subheader("⚖️ HRP Optimizer (Hierarchical Risk Parity)")
     opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="ti_opt_tickers").upper()
-    if st.button("🧮 Optimize (Risk Parity)", key="btn_rp"):
+    if st.button("🧮 Optimize (HRP)", key="btn_hrp"):
         try:
             tickers = [t.strip() for t in opt_tickers.split(",") if t.strip()]
             rets = []; valid = []
@@ -747,31 +842,22 @@ with tab_port:
             if not rets:
                 st.error("No valid tickers/data."); st.stop()
             R = pd.concat(rets, axis=1); R.columns = valid
-            cov = R.cov()
-            n = len(valid); w = np.ones(n)/n
-            for _ in range(500):
-                mrc = cov @ w
-                rc  = w * mrc
-                target = rc.mean()
-                grad = rc - target
-                w = np.clip(w - 0.05*grad, 0, None)
-                s = w.sum()
-                w = w / s if s > 1e-12 else np.ones(n)/n
-                if np.linalg.norm(grad) < 1e-6:
-                    break
-            weights = pd.Series(w, index=valid, name="Weight")
-            st.dataframe(weights.to_frame().T, use_container_width=True)
+            cov = (R.cov())  # daily cov
+            w = _hrp_weights(cov)
+            st.dataframe(w.to_frame().T, use_container_width=True)
             fig, ax = plt.subplots(figsize=(5,5))
-            weights.plot.pie(autopct="%.1f%%", ax=ax)
-            ax.set_ylabel(""); ax.set_title("Risk-Parity Weights")
+            w.plot.pie(autopct="%.1f%%", ax=ax)
+            ax.set_ylabel(""); ax.set_title("HRP Weights")
             st.pyplot(fig)
+            if not SCIPY_OK:
+                st.info("Install SciPy for true HRP clustering: pip install scipy")
         except Exception as e:
-            st.error(f"Optimizer error: {e}")
+            st.error(f"HRP error: {e}")
 
     st.subheader("🧭 Black–Litterman (simple views)")
     bl_tickers = st.text_input("Tickers (BL)", opt_tickers, key="ti_bl_tickers").upper()
     views_txt = st.text_area(
-        "Views (one per line: e.g. 'AAPL: +2' meaning +2% vs equilibrium; or 'NVDA: -1')",
+        "Views (one per line: 'AAPL: +2' => +2% vs equilibrium; 'NVDA: -1')",
         "AAPL: +2\nMSFT: +1", key="ta_bl_views"
     )
     if st.button("🧠 Compute BL Weights", key="btn_bl"):
@@ -872,68 +958,6 @@ with tab_port:
         except Exception as e:
             st.error(f"Studio error: {e}")
 
-    st.subheader("📊 Portfolio Simulator")
-    st.info("Enter your positions in CSV: ticker,shares,cost_basis")
-    holdings = st.text_area("e.g.\nAAPL,10,150\nMSFT,5,300", height=100, key="ta_port_holdings")
-    if st.button("▶️ Simulate Portfolio", key="btn_sim_port"):
-        rows = [r.strip().split(",") for r in holdings.splitlines() if r.strip()]
-        data=[]
-        for idx, row in enumerate(rows, 1):
-            if len(row) != 3:
-                st.warning(f"Skipping invalid row {idx}: {row}"); continue
-            ticker_, shares, cost = row
-            tkr = _map_symbol(ticker_.upper().strip())
-            try:
-                s=float(shares); c=float(cost)
-            except:
-                st.warning(f"Invalid numbers on row {idx}: {row}"); continue
-            hist = yf.Ticker(tkr).history(period="1d", auto_adjust=True)
-            if hist.empty:
-                st.warning(f"No price for {tkr}"); continue
-            price=float(hist["Close"].iloc[-1])
-            invested=s*c; value=s*price; pnl=value-invested
-            pnl_pct=(pnl/invested*100) if invested else np.nan
-
-            px = load_prices(tkr, period_sel, interval_sel)
-            if px.empty:
-                comp_sugg="N/A"
-            else:
-                df_i = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=include_bb)
-                if df_i.empty:
-                    comp_sugg="N/A"
-                else:
-                    df_csig = build_composite(df_i, ma_window, rsi_period,
-                                              use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
-                                              include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
-                    if df_csig.empty:
-                        comp_sugg="N/A"
-                    else:
-                        score = float(df_csig["Composite"].iloc[-1]) if "Composite" in df_csig else 0.0
-                        comp_sugg = "🟢 BUY" if score>=comp_thr else ("🔴 SELL" if score<=-comp_thr else "🟡 HOLD")
-
-            if pnl_pct > profit_target:     suggestion="🔴 SELL"
-            elif pnl_pct < -loss_limit:     suggestion="🟢 BUY"
-            else:                           suggestion=comp_sugg
-
-            data.append({
-                "Ticker":tkr,"Shares":s,"Cost Basis":c,"Price":price,
-                "Market Value":value,"Invested":invested,"P/L":pnl,
-                "P/L %":pnl_pct,"Composite Sig":comp_sugg,"Suggestion":suggestion
-            })
-        if data:
-            df_port=pd.DataFrame(data).set_index("Ticker")
-            st.dataframe(df_port, use_container_width=True)
-            c1,c2,c3 = st.columns(3)
-            c1.metric("Total Market Value", f"${df_port['Market Value'].sum():,.2f}")
-            c2.metric("Total Invested",     f"${df_port['Invested'].sum():,.2f}")
-            c3.metric("Total P/L",          f"${df_port['Market Value'].sum()-df_port['Invested'].sum():,.2f}")
-            fig, ax=plt.subplots(figsize=(5,5))
-            df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax)
-            ax.set_ylabel(""); ax.set_title("Portfolio Allocation")
-            st.pyplot(fig)
-        else:
-            st.error("No valid holdings provided.")
-
     st.subheader("🎲 Monte Carlo (Bootstrap) of Strategy Returns")
     mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="ti_mc_symbol").upper()
     n_paths = st.slider("Paths", 200, 3000, 800, 100, key="sl_mc_paths")
@@ -967,19 +991,170 @@ with tab_port:
         except Exception as e:
             st.error(f"Monte Carlo error: {e}")
 
+# ───────────────────────────── AUTO-OPTIMIZE (Optuna) ─────────────────────────────
+with tab_opt:
+    st.title("🛠️ Auto-Optimize — Optuna Bayesian Search")
+    if not OPTUNA_OK:
+        st.warning("Optuna not installed. Run: pip install optuna")
+    opt_symbol = st.text_input("Symbol (Optimize)", value="AAPL", key="ti_opt_symbol").upper()
+    n_trials = st.slider("Trials", 10, 200, 40, 5, key="sl_opt_trials")
+    objective_metric = st.selectbox("Optimize for", ["Sharpe", "Return - Drawdown Penalty"], key="sb_opt_metric")
+    run_opt = st.button("🚀 Run Optimization", key="btn_run_opt")
+
+    def _objective(trial):
+        mw  = trial.suggest_int("ma_window", 5, 60)
+        rp  = trial.suggest_int("rsi_period", 5, 30)
+        mf  = trial.suggest_int("macd_fast", 5, 20)
+        ms  = trial.suggest_int("macd_slow", 20, 50)
+        sg  = trial.suggest_int("macd_signal", 5, 20)
+        wma = trial.suggest_float("w_ma", 0.0, 2.0)
+        wrs = trial.suggest_float("w_rsi", 0.0, 2.0)
+        wmc = trial.suggest_float("w_macd", 0.0, 2.0)
+        wbb = trial.suggest_float("w_bb", 0.0, 2.0)
+        thr = trial.suggest_float("threshold", 0.0, 3.0)
+
+        px = load_prices(opt_symbol, period_sel, interval_sel)
+        if px.empty:
+            return 1e6
+        ind = compute_indicators(px, mw, rp, mf, ms, sg, use_bb=True)
+        if ind.empty:
+            return 1e6
+        sig = build_composite(ind, mw, rp, use_weighted=True, w_ma=wma, w_rsi=wrs, w_macd=wmc, w_bb=wbb,
+                              include_bb=True, threshold=thr, allow_short=allow_short)
+        bt, md, sh, wr, trd, tim, cagr = backtest(sig, allow_short=allow_short, cost_bps=cost_bps,
+                                                  sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
+                                                  vol_target=vol_target, interval=interval_sel)
+        # minimize
+        if objective_metric == "Sharpe":
+            return - (0 if np.isnan(sh) else sh)
+        else:
+            ret = float(bt["CumStrat"].iloc[-1] - 1.0)
+            score = ret - abs(md/100.0)*0.5
+            return -score
+
+    if run_opt and OPTUNA_OK:
+        try:
+            study = optuna.create_study(direction="minimize")
+            study.optimize(_objective, n_trials=int(n_trials))
+            st.success(f"Best value: {study.best_value:.4f}")
+            st.json(study.best_params)
+        except Exception as e:
+            st.error(f"Optuna error: {e}")
+
+# ───────────────────────────── EXECUTION SIM ─────────────────────────────
+with tab_exec:
+    st.title("🕹️ Execution Simulator — Slippage & Order Log")
+    ex_symbol = st.text_input("Symbol (Exec)", value="AAPL", key="ti_ex_symbol").upper()
+    slip_base_bps = st.slider("Base slippage (bps per trade)", 0.0, 50.0, 5.0, 0.5, key="sl_ex_base")
+    slip_atr_mult = st.slider("ATR-driven slippage ×", 0.0, 5.0, 0.5, 0.1, key="sl_ex_atr")
+    slip_vol_gamma = st.slider("Volume impact γ", 0.0, 5.0, 1.0, 0.1, key="sl_ex_gamma")
+    run_ex = st.button("Simulate Fills from Composite", key="btn_run_exec")
+
+    if run_ex:
+        try:
+            px = load_prices(ex_symbol, period_sel, interval_sel)
+            ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            sig = build_composite(ind, ma_window, rsi_period,
+                                  use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                  include_bb=include_bb, threshold=comp_thr, allow_short=allow_short)
+            d = sig.copy()
+            d["Return"] = d["Close"].pct_change().fillna(0.0)
+            d["Position"] = d["Trade"].shift(1).fillna(0).astype(int)
+            orders = []
+            cur_pos = 0
+            entry_px = np.nan
+            for i in range(1, len(d)):
+                want = int(d["Trade"].iat[i])
+                last = int(d["Trade"].iat[i-1])
+                if want != last:
+                    side = "BUY" if want > last else "SELL"
+                    # simple slippage model
+                    atrp = float((d["ATR"].iat[i] / d["Close"].iat[i]) * 10000)  # ATR in bps
+                    vol = float(d["Volume"].iat[i]) if "Volume" in d else 0
+                    vol_term = (0 if vol<=0 else (1.0/np.sqrt(vol))) * slip_vol_gamma * 10000
+                    slip_bps = slip_base_bps + slip_atr_mult*atrp + vol_term
+                    px_fill = float(d["Close"].iat[i] * (1 + (slip_bps/10000.0) * (1 if side=="BUY" else -1)))
+                    orders.append({"Time": d.index[i], "Side": side, "Fill": px_fill, "Slip_bps": slip_bps})
+                    cur_pos = want
+                    if cur_pos != 0:
+                        entry_px = px_fill
+                    else:
+                        entry_px = np.nan
+            if orders:
+                df_o = pd.DataFrame(orders).set_index("Time")
+                st.dataframe(df_o.tail(20), use_container_width=True)
+                st.download_button("Download orders CSV", df_o.to_csv(), "orders.csv", key="dl_orders")
+                st.info(f"Avg |slippage|: {abs(df_o['Slip_bps']).mean():.2f} bps")
+            else:
+                st.info("No position changes → no orders.")
+        except Exception as e:
+            st.error(f"Execution sim error: {e}")
+
+# ───────────────────────────── PAIRS / COINTEGRATION ─────────────────────────────
+with tab_pairs:
+    st.title("🔗 Pairs / Cointegration Lab")
+    if not STATSM_OK:
+        st.warning("statsmodels not installed. Run: pip install statsmodels")
+    uni = st.text_area("Universe (comma-sep)", "XOM, CVX, KO, PEP, JPM, BAC, MSFT, AAPL", key="ta_pairs_uni").upper()
+    topn = st.slider("Show top N pairs by coint p-value", 1, 10, 5, key="sl_pairs_topn")
+    run_pairs = st.button("Scan Pairs", key="btn_pairs_scan")
+
+    if run_pairs and STATSM_OK:
+        try:
+            tickers = [t.strip() for t in uni.split(",") if t.strip()]
+            hist = {}
+            for t in tickers:
+                px = load_prices(t, "2y", "1d")
+                if px.empty: continue
+                hist[t] = px["Close"]
+            names = list(hist.keys())
+            results = []
+            for i in range(len(names)):
+                for j in range(i+1, len(names)):
+                    a, b = names[i], names[j]
+                    try:
+                        s1, s2 = hist[a].align(hist[b], join="inner")
+                        score, pval, _ = coint(s1.values, s2.values)
+                        results.append({"A":a,"B":b,"pval":float(pval)})
+                    except Exception:
+                        pass
+            if not results:
+                st.info("No pairs evaluated."); st.stop()
+            dfp = pd.DataFrame(results).sort_values("pval").head(int(topn))
+            st.dataframe(dfp, use_container_width=True)
+
+            # quick mean-reversion for best pair
+            A = dfp.iloc[0]["A"]; B = dfp.iloc[0]["B"]
+            s1, s2 = hist[A].align(hist[B], join="inner")
+            beta = np.polyfit(s2, s1, 1)[0]
+            spread = s1 - beta*s2
+            z = (spread - spread.rolling(60).mean()) / (spread.rolling(60).std()+1e-9)
+            sig = pd.Series(0, index=z.index)
+            sig[z<-1] = 1; sig[z>1] = -1  # long A short B, and vice versa
+            # PnL (unhedged estimator)
+            rets = sig.shift(1).fillna(0) * spread.pct_change().fillna(0)
+            eq = (1+rets).cumprod()
+            fig, ax = plt.subplots(figsize=(9,3))
+            ax.plot(eq.index, eq.values); ax.set_title(f"Pair MR equity: {A}/{B}")
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Pairs error: {e}")
+
 # ───────────────────────────── HELP ─────────────────────────────
 with tab_help:
-    st.header("How QuantaraX Pro v5.1 Works")
+    st.header("How QuantaraX Ultra v6 Works")
     st.markdown(r"""
-**QuantaraX Pro v5.1** packs:
-- **Adaptive Composite** (MA/RSI/MACD + optional Bollinger) with vol-aware threshold & size.
-- **Event Guards**: flatten around earnings and sample FOMC dates.
-- **Robust Backtester**: long/short, costs, ATR stops/targets, vol targeting.
-- **Options Lens**: ATM IV, skew, within-chain IV-rank.
-- **ML Lab**: Purged TimeSeries CV, OOF probabilities → backtest & feature importances.
-- **Regimes**: HMM (if `hmmlearn`), else KMeans fallback.
-- **Portfolio**: Risk Parity, **Black–Litterman**, Strategy Studio, Monte Carlo.
+**Ultra v6** adds *serious* firepower:
+- **Adaptive Composite** (MA/RSI/MACD + optional Bollinger), vol-aware threshold & sizing.
+- **Event Guards**: Earnings & FOMC flattening.
+- **Backtester**: long/short, costs, ATR exits, vol targeting.
+- **Scanner**: Composite ranks + Options IV snapshot.
+- **ML Lab**: Purged TimeSeries CV, OOF probabilities, feature importances.
+- **Regimes**: HMM (if `hmmlearn`) or KMeans fallback.
+- **Portfolio**: HRP weights (SciPy), Black–Litterman views, Studio sandbox, Monte Carlo.
+- **Auto-Optimize**: Bayesian search over indicators/weights/threshold (Optuna).
+- **Execution**: Order log with ATR– & volume-aware slippage model.
+- **Pairs Lab**: Cointegration scan + quick mean-reversion equity.
 
-If you still see a duplicate-ID error, it means a new widget label collided elsewhere.
-All widgets here now have explicit `key=` values to avoid that.
+Everything downgrades gracefully if optional libs are missing.
 """)
