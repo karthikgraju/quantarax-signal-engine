@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro (v7, patched)
+# app.py — QuantaraX Pro (v8, hardened)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
@@ -6,6 +6,7 @@
 import math
 from typing import List, Tuple
 import time
+import warnings
 
 import streamlit as st
 import yfinance as yf
@@ -14,6 +15,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import feedparser
+
+warnings.simplefilter("ignore", FutureWarning)
 
 # Optional ML imports
 try:
@@ -25,7 +28,7 @@ except Exception:
     SKLEARN_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v7", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v8", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
@@ -86,20 +89,26 @@ def _map_symbol(sym: str) -> str:
 
 def _to_float(x) -> float:
     try:
+        # Handles numpy scalar, pandas scalar, Python numeric
         return float(x.item()) if hasattr(x, "item") else float(x)
     except Exception:
-        return float(x)
+        try:
+            # single-element Series
+            return float(x.iloc[0])
+        except Exception:
+            return float("nan")
 
 @st.cache_data(show_spinner=False, ttl=900)
 def load_prices(symbol: str, period: str, interval: str) -> pd.DataFrame:
-    """Robust loader with retry; auto_adjust=True to silence warnings."""
+    """Robust loader with retry; auto_adjust=True to avoid warnings."""
     sym = _map_symbol(symbol)
     for attempt in range(3):
         try:
             df = yf.download(sym, period=period, interval=interval, auto_adjust=True, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = [c[0] for c in df.columns]
-            return df.dropna()
+            if not df.empty:
+                return df.dropna()
         except Exception:
             time.sleep(0.8 * (attempt + 1))
     return pd.DataFrame()
@@ -121,8 +130,8 @@ def rss_news(symbol: str, limit: int = 5) -> list:
 
 def safe_earnings(symbol: str) -> pd.DataFrame:
     """
-    Returns a DataFrame with a normalized 'earn_date' column (datetime).
-    Works whether yfinance gives the date as an index or as a column with varying names.
+    Returns DataFrame with normalized 'earn_date' (datetime64).
+    Handles index/column schema variations from yfinance.
     """
     try:
         cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=8)
@@ -139,13 +148,11 @@ def safe_earnings(symbol: str) -> pd.DataFrame:
             for c in df.columns:
                 cl = c.lower().replace(" ", "")
                 if "earn" in cl and "date" in cl:
-                    date_col = c
-                    break
+                    date_col = c; break
             if date_col is None:
                 for c in df.columns:
                     if pd.api.types.is_datetime64_any_dtype(df[c]):
-                        date_col = c
-                        break
+                        date_col = c; break
             if date_col is None:
                 date_col = df.columns[0]
 
@@ -165,7 +172,7 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
         return pd.DataFrame()
 
     # MA
-    d[f"MA{ma_w}"] = d["Close"].rolling(ma_w).mean()
+    d[f"MA{ma_w}"] = d["Close"].rolling(ma_w, min_periods=ma_w).mean()
 
     # RSI (EMA-based)
     chg = d["Close"].diff()
@@ -190,15 +197,16 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
     # Bollinger
     if use_bb:
         w = 20; k = 2.0
-        mid = d["Close"].rolling(w).mean()
-        sd  = d["Close"].rolling(w).std(ddof=0)
+        mid = d["Close"].rolling(w, min_periods=w).mean()
+        sd  = d["Close"].rolling(w, min_periods=w).std(ddof=0)
         d["BB_M"], d["BB_U"], d["BB_L"] = mid, mid + k*sd, mid - k*sd
 
     # Stochastic
     klen = 14
-    ll = d["Low"].rolling(klen).min(); hh = d["High"].rolling(klen).max()
-    d["STO_K"] = 100 * (d["Close"] - ll) / (hh - ll)
-    d["STO_D"] = d["STO_K"].rolling(3).mean()
+    ll = d["Low"].rolling(klen, min_periods=klen).min(); hh = d["High"].rolling(klen, min_periods=klen).max()
+    rng = (hh - ll).replace(0, np.nan)
+    d["STO_K"] = 100 * (d["Close"] - ll) / rng
+    d["STO_D"] = d["STO_K"].rolling(3, min_periods=3).mean()
 
     # ADX (simplified Wilder's)
     adx_n = 14
@@ -214,8 +222,8 @@ def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int
 
     # Donchian Channels
     dc_n = 20
-    d["DC_U"] = d["High"].rolling(dc_n).max()
-    d["DC_L"] = d["Low"].rolling(dc_n).min()
+    d["DC_U"] = d["High"].rolling(dc_n, min_periods=dc_n).max()
+    d["DC_L"] = d["Low"].rolling(dc_n, min_periods=dc_n).min()
 
     # Keltner Channels (EMA + ATR)
     kel_n = 20
@@ -350,12 +358,12 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("🚀 QuantaraX — Composite Signal Engine (v7)")
+    st.title("🚀 QuantaraX — Composite Signal Engine (v8)")
 
     st.markdown("### Single‐Ticker Backtest")
     ticker = st.text_input("Ticker (e.g. AAPL or BTC/USDT)", "AAPL", key="inp_engine_ticker").upper()
 
-    # Live Price (via cached loader to avoid direct network hiccups)
+    # Live Price (cached loader, no direct 1d single call)
     px_live = load_prices(ticker, "5d", "1d")
     if not px_live.empty and "Close" in px_live:
         last_px = _to_float(px_live["Close"].iloc[-1])
@@ -470,6 +478,106 @@ with tab_engine:
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
+    # Extra tools (safe)
+    st.markdown("---")
+    with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
+        mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="inp_mtf_symbol")
+        if st.button("🔍 Check MTF", key="btn_mtf"):
+            try:
+                d1 = compute_indicators(load_prices(mtf_symbol, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                if d1.empty or dH.empty: st.warning("Insufficient data for MTF."); st.stop()
+                c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+                cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+                daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
+                st.write(f"**Daily composite:** {daily:.2f}")
+                st.write(f"**Hourly composite:** {hourly:.2f}")
+                st.success("✅ Signals agree") if np.sign(daily) == np.sign(hourly) else st.warning("⚠️ Signals disagree")
+            except Exception as e:
+                st.error(f"MTF error: {e}")
+
+    with st.expander("🧪 Walk-Forward Optimization (OOS)", expanded=False):
+        wf_symbol = st.text_input("Symbol (WFO)", value=ticker or "AAPL", key="inp_wfo_symbol")
+        c1, c2 = st.columns(2)
+        with c1:
+            ins_bars = st.number_input("In-sample bars", 60, 252*3, 126, 1, key="wfo_ins")
+            oos_bars = st.number_input("OOS bars", 20, 252, 63, 1, key="wfo_oos")
+        with c2:
+            w_thr = st.slider("Composite trigger (WFO)", 0.0, 3.0, 1.0, 0.1, key="wfo_thr")
+            wf_allow_short = st.toggle("Allow shorts (WFO)", value=False, key="wfo_short")
+        if st.button("🏃 Run Walk-Forward", key="btn_wfo"):
+            try:
+                px = load_prices(wf_symbol, "2y", "1d")
+                if px.empty: st.warning("No data for WFO."); st.stop()
+                def run_eq(symbol: str,
+                           ma_list: List[int], rsi_list: List[int],
+                           mf_list: List[int], ms_list: List[int], sig_list: List[int],
+                           insample_bars: int, oos_bars: int,
+                           w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, threshold=1.0,
+                           allow_short=False, cost_bps=5.0):
+                    oos_curves = []; summary = []
+                    start=200; i=start
+                    while i + insample_bars + oos_bars <= len(px):
+                        ins = px.iloc[i : i+insample_bars]
+                        oos = px.iloc[i+insample_bars : i+insample_bars+oos_bars]
+                        best=None; best_score=-1e9
+                        for mw in ma_list:
+                            for rp in rsi_list:
+                                for mf in mf_list:
+                                    for ms in ms_list:
+                                        for s in sig_list:
+                                            ins_ind = compute_indicators(ins, mw, rp, mf, ms, s, use_bb=True)
+                                            if ins_ind.empty: continue
+                                            ins_sig = build_composite(ins_ind, mw, rp, use_weighted=True, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb, include_bb=True, threshold=threshold, allow_short=allow_short)
+                                            ins_bt, md, sh, wr, tr, ti, cg = backtest(ins_sig, allow_short=allow_short, cost_bps=cost_bps)
+                                            perf = (ins_bt["CumStrat"].iloc[-1]-1)*100 if "CumStrat" in ins_bt else -1e9
+                                            score = perf - abs(md)
+                                            if score > best_score:
+                                                best_score = score
+                                                best = (mw, rp, mf, ms, s, sh, perf, md)
+                        if best is None:
+                            i += oos_bars; continue
+                        mw, rp, mf, ms, s, sh, perf, mdd = best
+                        oos_ind = compute_indicators(oos, mw, rp, mf, ms, s, use_bb=True)
+                        if oos_ind.empty:
+                            i += oos_bars; continue
+                        oos_sig = build_composite(oos_ind, mw, rp, use_weighted=True, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb, include_bb=True, threshold=threshold, allow_short=allow_short)
+                        oos_bt, mo_dd, mo_sh, *_ = backtest(oos_sig, allow_short=allow_short, cost_bps=cost_bps)
+                        if "CumStrat" in oos_bt:
+                            oos_curves.append(oos_bt[["CumStrat"]].rename(columns={"CumStrat":"Equity"}))
+                        summary.append({
+                            "Window": f"{oos.index[0].date()} → {oos.index[-1].date()}",
+                            "MA": mw, "RSI": rp, "MACDf": mf, "MACDs": ms, "SIG": s,
+                            "OOS %": ((oos_bt["CumStrat"].iloc[-1]-1)*100) if "CumStrat" in oos_bt else np.nan,
+                            "OOS Sharpe": mo_sh, "OOS MaxDD%": mo_dd
+                        })
+                        i += oos_bars
+                    eq = pd.concat(oos_curves, axis=0) if oos_curves else pd.DataFrame()
+                    sm = pd.DataFrame(summary)
+                    return eq, sm
+                eq, sm = run_eq(
+                    wf_symbol,
+                    ma_list=[ma_window, max(5, ma_window-5), min(60, ma_window+5)],
+                    rsi_list=[rsi_period, max(5, rsi_period-7), min(30, rsi_period+7)],
+                    mf_list=[macd_fast, max(5, macd_fast-4), min(20, macd_fast+4)],
+                    ms_list=[macd_slow, max(20, macd_slow-6), min(50, macd_slow+6)],
+                    sig_list=[macd_signal, max(5, macd_signal-4), min(20, macd_signal+4)],
+                    insample_bars=int(ins_bars),
+                    oos_bars=int(oos_bars),
+                    w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                    threshold=w_thr, allow_short=wf_allow_short, cost_bps=5.0
+                )
+                if not sm.empty:
+                    st.dataframe(sm, use_container_width=True)
+                if not eq.empty and "Equity" in eq:
+                    fig, ax = plt.subplots(figsize=(10,3))
+                    ax.plot(eq.index, eq["Equity"]); ax.set_title("Walk-Forward OOS Equity (stitched)")
+                    st.pyplot(fig)
+                else:
+                    st.info("WFO produced no OOS segments (not enough data).")
+            except Exception as e:
+                st.error(f"WFO error: {e}")
+
     # Batch Backtest
     st.markdown("---")
     st.markdown("### Batch Backtest")
@@ -527,7 +635,7 @@ MSFT,5,300""", height=100, key="ta_portfolio")
             tkr = _map_symbol(ticker_.upper().strip())
             try:
                 s=float(shares); c=float(cost)
-            except:
+            except Exception:
                 st.warning(f"Invalid numbers on row {idx}: {row}"); continue
             hist = load_prices(tkr, "5d", "1d")
             if hist.empty:
@@ -688,7 +796,6 @@ with tab_scan:
                 rec = rec_map.get(int(np.sign(comp)), "🟡 HOLD")
                 mlp = np.nan
                 if use_ml_scan and SKLEARN_OK:
-                    # quick tiny model just for a probability score
                     X = pd.DataFrame(index=ind.index)
                     X["ret1"] = ind["Close"].pct_change()
                     X["rsi"]  = ind.get(f"RSI{rsi_period}", np.nan)
@@ -826,13 +933,14 @@ with tab_port:
 with tab_help:
     st.header("How QuantaraX Pro Works")
     st.markdown(r"""
-**QuantaraX Pro v7** adds:
+**QuantaraX Pro v8** includes:
 - Expanded indicators (Stochastic, ADX, Donchian, Keltner) for richer composites.
-- Robust backtester: shorting, trading costs, ATR stops/targets, volatility targeting.
+- Robust backtester: shorts, trading costs, ATR stops/targets, vol targeting.
 - ML Lab: RandomForest probabilities → signals, OOS metrics, feature importance.
 - Universe Scanner: rank by composite and optional ML probability.
 - Regime Detection: cluster market states on vol/momentum/slope; visualize.
 - Portfolio: risk-parity allocator; Monte Carlo distribution of strategy returns.
+- Tools: Multi-Timeframe Confirmation and Walk-Forward Optimization (OOS).
 
-Everything guards against empty data / schema changes (earnings + news).
+All network calls are guarded. If a provider times out, the app degrades gracefully.
 """)
