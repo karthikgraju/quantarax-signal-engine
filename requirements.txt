@@ -1,11 +1,9 @@
-streamlit>=1.36
-yfinance>=0.2.43
-pandas>=2.2
-numpy>=1.26
-matplotlib>=3.8
-feedparser>=6.0
-vaderSentiment>=3.3.2
-
-# ML (works on Python 3.12+, incl. 3.13)
-scikit-learn>=1.6
-
+streamlit
+yfinance
+pandas
+numpy
+matplotlib
+vaderSentiment
+feedparser
+scikit-learn
+curl-cffi     # (yfinance dependency for some environments)
