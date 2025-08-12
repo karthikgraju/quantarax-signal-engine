@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro (v13, "Insane Edition": options, sizing, risk, patterns)
+# app.py — QuantaraX Pro (v14, "Insane Edition" + Deep Help)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
@@ -29,7 +29,7 @@ except Exception:
     SKLEARN_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v13", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v14", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
@@ -526,7 +526,7 @@ def quick_ml_signal(ind: pd.DataFrame, rsi_period: int, horizon: int = 1,
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("🚀 QuantaraX — Composite Signal Engine (v13)")
+    st.title("🚀 QuantaraX — Composite Signal Engine (v14)")
     st.caption("For day traders, swing traders, options traders, and portfolio builders — one cockpit, many modes.")
 
     st.markdown("### Single‐Ticker Backtest")
@@ -562,14 +562,14 @@ with tab_engine:
             st.info("No recent news found.")
 
     # Earnings (UTC-safe)
-    def render_next_earnings(symbol: str):
+    def render_next_earnings_local(symbol: str):
         nxt = next_earnings_date(symbol)
         if nxt is None:
             st.info("📅 Earnings: unavailable")
         else:
             dt, _row = nxt
             st.info(f"📅 Next Earnings (UTC date): **{dt}**")
-    render_next_earnings(ticker)
+    render_next_earnings_local(ticker)
 
     # Signal source controls
     st.markdown("#### Signal Source")
@@ -1444,19 +1444,214 @@ with tab_port:
 
 # ───────────────────────────── HELP ─────────────────────────────
 with tab_help:
-    st.header("How to use QuantaraX Pro (v13)")
+    st.header("QuantaraX Pro v14 — Deep Guide & Investor-Ready Documentation")
     st.markdown(r"""
-**New in v13**
-- **Options Desk** (chains, IV when provided by Yahoo, Greeks-ready payoff plots for common strategies).
-- **Position Sizing** (fixed risk %, ATR stops, Kelly approx).
-- **Risk Hub** (VaR / CVaR, day-of-week returns, bootstrap risk-of-ruin).
-- **Pattern Radar** (hammer, shooting star, doji, engulfings, 20-day breakouts).
+Welcome to the **definitive manual** for QuantaraX. This page explains **what every module does, how it works under the hood, the math**, and practical usage patterns for **retail and advanced/institutional** users.
 
-**Tips for every trader**
-- **Day trader**: MTF + Pattern Radar + ATR sizing. Use correlation heatmap to avoid stacking the same bet.
-- **Swing trader**: Blended signals + Earnings guard + Seasonality. Use Parameter Surface to avoid overfit.
-- **Options trader**: Options Desk to sketch payoffs; combine with Composite/ML bias and Earnings guard.
-- **Investor**: Beta/Alpha, Rolling Sharpe, Profit Factor, One-Pager export for IC memos.
+---
 
-Everything is guarded for timeouts and missing fields. If a provider fails, modules degrade gracefully.
+## 📌 Quick Start
+
+- **Retail (simple)**: Use *Composite* signals with default preset **Balanced**. Run the backtest, check *CAGR / Sharpe / Max DD*, and see **“Why This Signal?”** for plain-English reasoning. Add **Earnings Guard ±2–5 days** around announcements.
+- **Investor (advanced)**: Switch mode in the sidebar. You’ll see **Beta/Alpha**, **Rolling Sharpe**, **Drawdown**, **Trade Ledger**, and exportable **One-Pager**. Use **Parameter Surface** to see robustness across (MA, RSI).
+
+---
+
+## 🔗 Data Sources & Reliability
+
+- **Prices** via `yfinance` with `auto_adjust=True`. OHLCV is downloaded in **up to 3 retries**. If a provider times out, features degrade gracefully (you’ll see an info/warning instead of a crash).
+- **News**: Tries Yahoo news first; falls back to Yahoo RSS. Sentiment = **VADER** compound score.
+- **Earnings**: `Ticker.get_earnings_dates`. We normalize to a single column `earn_date` (UTC), and detect next future date robustly.
+
+> **Note:** Free APIs can be inconsistent; always sanity-check with another source if stakes are high.
+
+---
+
+## 🧮 Indicators (core math)
+
+- **MA (SMA)**: rolling mean of Close over *N* bars.
+- **RSI (EMA variant)**: `RS = EMA(up) / EMA(down)`; `RSI = 100 - 100/(1+RS)`. Signals: `<30` oversold, `>70` overbought.
+- **MACD**: `EMA(fast) - EMA(slow)`, with signal `EMA(MACD, span=signal)`. Crosses create signals.
+- **ATR**: Wilder’s TR smoothed (14). Used for stops/targets and Keltner.
+- **Bollinger Bands**: `Mid = SMA(20)`, `Upper/Lower = Mid ± 2σ`.
+- **Stochastic**: `%K = 100*(Close - LL) / (HH - LL)`, `%D = SMA(%K, 3)`.
+- **ADX** (simplified): computes ±DI from smoothed +DM/–DM vs TR, then `DX = |+DI - –DI| / (+DI + –DI)`, smoothed to ADX.
+- **Donchian**: rolling HH/LL (20).
+- **Keltner**: `EMA(20) ± 2*ATR`.
+
+All indicators are computed on the **downloaded interval** (daily or hourly) and **drop NA rows** to keep downstream logic safe.
+
+---
+
+## 🟩 Composite Signal (how trading decisions are formed)
+
+Each bar we compute **discrete signals**:
+- **MA**: +1 on bullish cross (price crosses above MA), -1 on bearish cross.
+- **RSI**: +1 if RSI<30, -1 if RSI>70, else 0.
+- **MACD**: +1 on MACD crossing above signal, -1 on crossing below.
+- **BB** (optional): +1 when close < lower band (mean-revert long), -1 when close > upper band.
+
+Then either:
+- **Unweighted**: `Composite = MA + RSI + MACD`
+- **Weighted**: `Composite = w_ma*MA + w_rsi*RSI + w_macd*MACD + w_bb*BB`
+
+**Trading rule:**  
+- If `Composite ≥ threshold` → **LONG**.  
+- If `allow_short` and `Composite ≤ -threshold` → **SHORT** else **FLAT**.
+
+**Earnings Guard:** sets **Trade=0** within ±N days of any earnings date (UTC-safe).
+
+---
+
+## ▶️ Backtester Assumptions
+
+- **Return** = % change of Close per bar.  
+- **Position** = yesterday’s trade decision (1, 0, or -1 if shorts allowed).  
+- **Vol targeting** (optional): scales per-bar exposure to target annualized vol using a **20-bar realized vol** estimate, with **leverage cap = 3×**.
+- **Costs**: per round-trip cost applied on **any position change** (open+close) using `cost_bps`.
+- **ATR exit rules** (optional): If price moves `±(SL×ATR)` against position or hits `TP×ATR` in favor, we **flatten next bar**.
+- **CAGR**: approximated from compounded equity with bar-frequency → annualization (252 trading days for 1d; 252*6 for 1h).
+
+**Metrics:**  
+`Sharpe` = annualized mean / annualized std of strategy returns (population std).  
+`Max DD` = min of `equity/equity.cummax - 1`.  
+`Win rate` = % bars with positive strategy return (not trade-level).  
+`Time in market` = % bars with nonzero Position.  
+`Trades` = count of position changes.
+
+---
+
+## 🤝 Blending with Quick-ML
+
+- Features from indicators: short-term returns, volatility, RSI, MACD, Stochastic, ADX, and Bollinger position.
+- **RandomForest** (fast, OOS-ish): 80/20 split → train on 80%, predict the last 20% only.
+- ML trade rule: long if `P(long) ≥ enter`, short if ≤ exit (if shorts enabled).
+- **Blended** signal = `sign( w*Composite + (1-w)*ML )`.
+
+> For *true* OOS research, use the **ML Lab** tab (custom splits, metrics, permutation importance).
+
+---
+
+## ⏱️ MTF — Multi-Timeframe Confirmation
+
+We compute Composite on **daily** and **hourly** data (last value only) with fixed weights (1,1,1,0.5).  
+- If **signs match** → *confirmation*.  
+- If **signs differ** → *disagreement*; many traders down-weight the trade or wait for alignment.
+
+---
+
+## 🧪 Walk-Forward Optimization (WFO)
+
+- **Grid** around your current `(MA, RSI, MACD fast/slow/signal)` with small ± ranges.
+- For each walk segment:  
+  1) Optimize **in-sample** on a score: **Perf% − |MaxDD|**.  
+  2) Freeze best params → **OOS backtest** next window.  
+  3) Stitch OOS curves and summarize stats.  
+This reveals if your idea is **stable** out-of-sample, avoiding single-period overfit.
+
+---
+
+## 📡 Universe Scanner & 🔗 Correlation
+
+- **Scanner**: for each ticker, compute last Composite (and optional quick ML prob), recommend **BUY/HOLD/SELL**.  
+- **Correlation heatmap**: daily returns correlations across your universe to avoid **clustering the same bet**.
+
+---
+
+## 📈 Options Desk
+
+- **Chains** (calls/puts) with **mid**, **IV** (when Yahoo provides), **volume**, **openInterest**.  
+- **Strategies**: Long Call/Put, Debit Vertical (call/put), Long Strangle, Covered Call.  
+- Payoff charts are **expiration P/L per 1x** based on inputs (strikes & premiums).  
+> Greeks are not computed (Yahoo doesn’t always supply reliable Greeks) — but IV and pricing fields are shown when available.
+
+---
+
+## 🎯 Position Sizing
+
+Two ways:
+1) **Fixed-fractional risk**: Risk `%` of account equity, stop = fixed price or `ATR×mult`.  
+   `shares = floor( (equity * risk%) / (entry - stop) )`.
+2) **ATR stops** allow volatility-aware sizing without guessing.
+
+---
+
+## 🛡️ Risk Hub
+
+- **VaR (quantile)** & **CVaR** (tail mean) **on strategy daily returns**, configurable confidence (e.g., 95%).  
+- **Day-of-week seasonality**: average return by weekday.  
+- **Risk of Ruin (bootstrap)**: sample N bars repeatedly; probability of ever hitting **−50% drawdown**.
+
+> These are **historical** statistics, not forecasts. Use as guardrails, not guarantees.
+
+---
+
+## 🕯️ Pattern Radar
+
+- Candlestick detections: **Hammer, Shooting Star, Bull/Bear Engulfing, Doji** (simple geometric rules).  
+- **20-day breakout/breakdown** labels (`BO20`, `BD20`).  
+Great for **visual confirmation** & **scan panels**.
+
+---
+
+## 📉 Regimes
+
+- Clusters on **volatility (20-bar σ), momentum (20-bar return), MA slope**.  
+- If scikit-learn is installed → **KMeans(3)**; otherwise a quantile-based proxy.  
+- The plot shades regimes over price to reveal **trend, chop, or high-vol states**.  
+You can condition strategies by regime (e.g., trend signals only in regime 2).
+
+---
+
+## 💼 Portfolio
+
+- **Risk Parity (ERC)**: gradient steps to equalize **risk contributions** `w ∘ (Σw)`.  
+- **Monte Carlo**: end-wealth distribution via  
+  - **IID bootstrap** of returns, or  
+  - **Block bootstrap** (preserves autocorrelation, recommended).  
+We report **P5/P25/Median/P75/P95** to frame expectations.
+
+---
+
+## 🧾 One-Pager Export
+
+Downloads a **Markdown brief** including settings, risk controls, key metrics, and the next earnings date — perfect for **IC memos** or **investor updates**.
+
+---
+
+## 📚 Glossary (fast)
+
+- **CAGR**: annualized growth of equity curve.  
+- **Sharpe**: risk-adjusted return (μ/σ) annualized.  
+- **Max Drawdown**: largest peak-to-trough drop.  
+- **Kelly (approx)**: `mean(daily)/var(daily)` — benchmark only, not a prescription.  
+- **VaR/CVaR**: loss-at-quantile and expected loss beyond it.  
+- **Beta/Alpha**: sensitivity to benchmark & residual return (annualized alpha).
+
+---
+
+## 🧩 Tips & Playbooks
+
+- **Day trading**: Use **MTF confirm** + **ATR stops** + **Pattern Radar**. Avoid correlated tickers.  
+- **Swing trading**: **Blended** signals with **Earnings Guard ±3–5d**. Validate robustness on **Parameter Surface** & **WFO**.  
+- **Options**: Align direction with Composite/ML bias, then sketch **risk-defined** structures (debit spreads/strangles).  
+- **Investors**: Track **Beta/Alpha**, stabilize with **Risk Parity**, and use **block bootstrap** for realistic dispersions.
+
+---
+
+## 🧯 Troubleshooting
+
+- **No data / timeouts**: Retry or switch to daily interval; free sources throttle.  
+- **Weird earnings date**: We normalize and choose the **next ≥ today (UTC)**; if vendor off, guard remains safe (flat).  
+- **Zero trades**: Lower `threshold`, enable **weighted**, or extend **History**.  
+- **Exploding leverage**: If you use **vol targeting**, we cap scale at **3×**; still, consider lower targets.  
+- **ML seems flat**: Ensure enough rows (`>200`) and **horizon=1–3**. For serious validation, use **ML Lab** & **WFO**.
+
+---
+
+## ⚠️ Disclaimer
+
+This app is **for research & education**. Markets carry risk. Past performance ≠ future results. Always verify with multiple data sources and consider consulting a licensed advisor before allocating real capital.
+
+Made in Toronto, Canada by KG - Backed by local VC firms.
 """)
