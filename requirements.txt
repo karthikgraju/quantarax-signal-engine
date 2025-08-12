@@ -3,7 +3,10 @@ yfinance
 pandas
 numpy
 matplotlib
-vaderSentiment
 feedparser
+vaderSentiment
 scikit-learn
-curl-cffi     # (yfinance dependency for some environments)
+optuna
+scipy
+statsmodels
+hmmlearn
