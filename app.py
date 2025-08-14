@@ -1,6 +1,7 @@
-# app.py — QuantaraX Pro v20 (investor-ready, hardened)
+# app.py — QuantaraX Pro v21 (clean earnings + full advanced suite)
 # ---------------------------------------------------------------------------------
-# pip install: streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
+# pip install:
+#   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
 
 import math
 import time
@@ -27,7 +28,7 @@ except Exception:
     SKLEARN_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX — Decision Engine (v20)", layout="wide")
+st.set_page_config(page_title="QuantaraX — Decision Engine (v21)", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
@@ -42,40 +43,40 @@ for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-if st.sidebar.button("🔄 Reset to defaults", key="btn_reset_defaults_v20"):
+if st.sidebar.button("🔄 Reset to defaults", key="btn_reset_defaults_v21"):
     for k, v in DEFAULTS.items():
         st.session_state[k] = v
 
 st.sidebar.subheader("Indicator Parameters")
-ma_window   = st.sidebar.slider("MA window",      5, 60, st.session_state["ma_window"],   key="ma_window_v20")
-rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="rsi_period_v20")
-macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="macd_fast_v20")
-macd_slow   = st.sidebar.slider("MACD slow span", 20, 50, st.session_state["macd_slow"],  key="macd_slow_v20")
-macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal_v20")
+ma_window   = st.sidebar.slider("MA window",      5, 60, st.session_state["ma_window"],   key="ma_window_v21")
+rsi_period  = st.sidebar.slider("RSI lookback",   5, 30, st.session_state["rsi_period"],  key="rsi_period_v21")
+macd_fast   = st.sidebar.slider("MACD fast span", 5, 20, st.session_state["macd_fast"],   key="macd_fast_v21")
+macd_slow   = st.sidebar.slider("MACD slow span", 20, 50, st.session_state["macd_slow"],  key="macd_slow_v21")
+macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_signal"], key="macd_signal_v21")
 
 st.sidebar.subheader("Composite v2 (advanced)")
-use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="use_weighted_v20")
-include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True, key="include_bb_v20")
-w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, 1.0, 0.1, key="w_ma_v20")
-w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, 1.0, 0.1, key="w_rsi_v20")
-w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, 1.0, 0.1, key="w_macd_v20")
-w_bb   = st.sidebar.slider("Weight • BB",   0.0, 2.0, 0.5, 0.1, key="w_bb_v20") if include_bb else 0.0
-comp_thr = st.sidebar.slider("Composite trigger (enter/exit)", 0.0, 3.0, 1.0, 0.1, key="comp_thr_v20")
+use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="use_weighted_v21")
+include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True, key="include_bb_v21")
+w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, 1.0, 0.1, key="w_ma_v21")
+w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, 1.0, 0.1, key="w_rsi_v21")
+w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, 1.0, 0.1, key="w_macd_v21")
+w_bb   = st.sidebar.slider("Weight • BB",   0.0, 2.0, 0.5, 0.1, key="w_bb_v21") if include_bb else 0.0
+comp_thr = st.sidebar.slider("Composite trigger (enter/exit)", 0.0, 3.0, 1.0, 0.1, key="comp_thr_v21")
 
 st.sidebar.subheader("Risk & Costs")
-allow_short = st.sidebar.toggle("Allow shorts", value=False, key="allow_short_v20")
-cost_bps    = st.sidebar.slider("Trading cost (bps/side)", 0.0, 25.0, 5.0, 0.5, key="cost_bps_v20")
-sl_atr_mult = st.sidebar.slider("Stop • ATR ×", 0.0, 5.0, 2.0, 0.1, key="sl_atr_mult_v20")
-tp_atr_mult = st.sidebar.slider("Target • ATR ×", 0.0, 8.0, 3.0, 0.1, key="tp_atr_mult_v20")
-vol_target  = st.sidebar.slider("Vol targeting (annual)", 0.0, 0.5, 0.0, 0.05, key="vol_target_v20")
+allow_short = st.sidebar.toggle("Allow shorts", value=False, key="allow_short_v21")
+cost_bps    = st.sidebar.slider("Trading cost (bps/side)", 0.0, 25.0, 5.0, 0.5, key="cost_bps_v21")
+sl_atr_mult = st.sidebar.slider("Stop • ATR ×", 0.0, 5.0, 2.0, 0.1, key="sl_atr_mult_v21")
+tp_atr_mult = st.sidebar.slider("Target • ATR ×", 0.0, 8.0, 3.0, 0.1, key="tp_atr_mult_v21")
+vol_target  = st.sidebar.slider("Vol targeting (annual)", 0.0, 0.5, 0.0, 0.05, key="vol_target_v21")
 
 st.sidebar.subheader("Data")
-period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1, key="period_sel_v20")
-interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0, key="interval_sel_v20")
+period_sel   = st.sidebar.selectbox("History", ["6mo","1y","2y","5y"], index=1, key="period_sel_v21")
+interval_sel = st.sidebar.selectbox("Interval", ["1d","1h"], index=0, key="interval_sel_v21")
 
 st.sidebar.subheader("Portfolio Guardrails")
-profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, key="profit_target_v20")
-loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5,  key="loss_limit_v20")
+profit_target = st.sidebar.slider("Profit target (%)", 1, 100, 10, key="profit_target_v21")
+loss_limit    = st.sidebar.slider("Loss limit (%)",  1, 100, 5,  key="loss_limit_v21")
 
 # ───────────────────────────── Helpers ─────────────────────────────
 def utcnow():
@@ -144,44 +145,61 @@ def rss_news(symbol: str, limit: int = 5) -> list:
     except Exception:
         return []
 
-def safe_earnings(symbol: str) -> pd.DataFrame:
-    """Returns DataFrame with normalized 'earn_date' (datetime64)."""
-    try:
-        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=12)
-        if isinstance(cal, pd.DataFrame) and not cal.empty:
-            df = cal.copy()
-            if isinstance(df.index, pd.DatetimeIndex) or (df.index.name and "date" in str(df.index.name).lower()):
-                df = df.reset_index()
-            # pick any datetime-like column
-            date_col = None
-            for c in df.columns:
-                if "earn" in c.lower() and "date" in c.lower():
-                    date_col = c; break
-            if date_col is None:
+# ───── Clean earnings pipeline (robust, future/past correct, UTC safe) ─────
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_earnings_dates(symbol: str, limit: int = 16) -> pd.DataFrame:
+    """
+    Unified fetch → normalized 'earn_ts' (UTC). Handles index/column variations.
+    """
+    sym = _map_symbol(symbol)
+    for attempt in range(3):
+        try:
+            raw = yf.Ticker(sym).get_earnings_dates(limit=limit)
+            if isinstance(raw, pd.DataFrame) and not raw.empty:
+                df = raw.copy()
+                # If the date is in index, promote to column
+                if isinstance(df.index, pd.DatetimeIndex) or (df.index.name and "date" in str(df.index.name).lower()):
+                    df = df.reset_index()
+                # Locate a datetime-like column
+                dt_col = None
                 for c in df.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df[c]):
-                        date_col = c; break
-            if date_col is None:
-                date_col = df.columns[0]
-            df = df.rename(columns={date_col: "earn_date"})
-            df["earn_date"] = pd.to_datetime(df["earn_date"], errors="coerce")
-            return df.dropna(subset=["earn_date"]).sort_values("earn_date")
-    except Exception:
-        pass
-    return pd.DataFrame()
+                    if "earn" in c.lower() and "date" in c.lower():
+                        dt_col = c; break
+                if dt_col is None:
+                    for c in df.columns:
+                        if pd.api.types.is_datetime64_any_dtype(df[c]):
+                            dt_col = c; break
+                if dt_col is None:
+                    dt_col = df.columns[0]
+                df = df.rename(columns={dt_col: "earn_ts"})
+                df["earn_ts"] = pd.to_datetime(df["earn_ts"], errors="coerce", utc=True)
+                df = df.dropna(subset=["earn_ts"]).sort_values("earn_ts").reset_index(drop=True)
+                return df[["earn_ts"]]
+        except Exception:
+            time.sleep(0.5 * (attempt + 1))
+    return pd.DataFrame(columns=["earn_ts"])
 
-def next_earnings_line(symbol: str) -> str:
-    er = safe_earnings(symbol)
-    if er.empty:
-        return "📅 Earnings: unavailable"
-    today = utcnow().date()
-    future = er[er["earn_date"].dt.date >= today]
-    if not future.empty:
-        nxt = future.iloc[0]["earn_date"].date()
-        return f"📅 Next Earnings: **{nxt}**"
-    # else show last past date
-    prev = er.iloc[-1]["earn_date"].date()
-    return f"📅 Last Earnings: {prev} (no upcoming date found)"
+def earnings_next_last(symbol: str):
+    """
+    Returns (next_ts, last_ts, table) where *_ts are tz-aware UTC Timestamps or None.
+    """
+    df = fetch_earnings_dates(symbol)
+    if df.empty:
+        return None, None, df
+    today_utc = utcnow().normalize()  # midnight UTC today
+    future = df[df["earn_ts"] >= today_utc]
+    past   = df[df["earn_ts"] <  today_utc]
+    nxt = future.iloc[0]["earn_ts"] if not future.empty else None
+    prv = past.iloc[-1]["earn_ts"]  if not past.empty   else None
+    return nxt, prv, df
+
+def format_earnings_line(nxt, prv) -> str:
+    if nxt is not None:
+        days = (nxt.date() - utcnow().date()).days
+        return f"📅 **Next Earnings:** {nxt.date()}  ({days}d)"
+    if prv is not None:
+        return f"📅 **Last Earnings:** {prv.date()}  (no upcoming date found)"
+    return "📅 Earnings: unavailable"
 
 # ─────────── Indicators / Composite ───────────
 def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int, sig: int,
@@ -369,12 +387,12 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
 # ─────────── Advanced analytics: Earnings Event Study & Factor Box ───────────
 def earnings_event_study(px: pd.DataFrame, earn_df: pd.DataFrame,
                          window_pre=5, window_post=5) -> dict:
-    if px.empty or earn_df.empty or "earn_date" not in earn_df:
+    if px.empty or earn_df.empty or "earn_ts" not in earn_df.columns:
         return {}
     px = px.copy().sort_index()
     px["ret"] = px["Close"].pct_change()
     closes = px["Close"]
-    dates = pd.to_datetime(earn_df["earn_date"]).dropna().unique()
+    dates = pd.to_datetime(earn_df["earn_ts"], utc=True).dropna().unique()
     paths, gaps, d1 = [], [], []
     for d in dates:
         if d not in px.index:
@@ -420,7 +438,6 @@ def factor_exposures(px: pd.DataFrame, lookback="3y") -> pd.DataFrame:
     r_y = px["Close"].pct_change().dropna()
     if r_y.empty: return pd.DataFrame()
     regs = []
-    X_cols = []
     for t, name in proxies.items():
         ref = load_prices(t, "5y", "1d")
         if ref.empty or "Close" not in ref: 
@@ -436,7 +453,6 @@ def factor_exposures(px: pd.DataFrame, lookback="3y") -> pd.DataFrame:
         resid = Y - Xc @ beta
         R2 = 1 - (resid**2).sum()/((Y - Y.mean())**2).sum()
         regs.append((name, float(beta[1]), float(beta[0]), float(R2)))
-        X_cols.append(name)
     if not regs:
         return pd.DataFrame()
     return pd.DataFrame(regs, columns=["Factor","Beta","Alpha","R2"]).set_index("Factor")
@@ -468,13 +484,13 @@ def confidence_score(comp: float, mtf_agree: bool, senti: float) -> Tuple[int,st
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
-    st.title("QuantaraX — Decision Engine (v20)")
+    st.title("QuantaraX — Decision Engine (v21)")
 
     c_head1, c_head2 = st.columns([3,1])
     with c_head1:
-        ticker = st.text_input("Symbol (e.g., AAPL or BTC/USDT)", "AAPL", key="inp_engine_ticker_v20").upper()
+        ticker = st.text_input("Symbol (e.g., AAPL or BTC/USDT)", "AAPL", key="inp_engine_ticker_v21").upper()
     with c_head2:
-        mode = st.selectbox("Mode", ["Beginner","Pro"], index=0, key="mode_v20")
+        mode = st.selectbox("Mode", ["Beginner","Pro"], index=0, key="mode_v21")
 
     # Live pricing & freshness
     px_live = load_prices(ticker, "5d", "1d")
@@ -486,8 +502,9 @@ with tab_engine:
               "Yes" if meta["fresh"] else "No")
     c3.metric("⏱ Age", f"{meta['age_hours']:.1f}h" if not np.isnan(meta["age_hours"]) else "N/A")
 
-    # Earnings line (robust future/past handling)
-    st.info(next_earnings_line(ticker))
+    # Earnings (clean future/past handling)
+    nxt_ts, prv_ts, er_table = earnings_next_last(ticker)
+    st.info(format_earnings_line(nxt_ts, prv_ts))
 
     # News pipeline
     news = safe_get_news(ticker)
@@ -513,7 +530,7 @@ with tab_engine:
             st.info("No recent news found.")
 
     # Backtest controls
-    if st.button("▶️ Run Composite Backtest", key="btn_engine_backtest_v20"):
+    if st.button("▶️ Run Composite Backtest", key="btn_engine_backtest_v21"):
         px = load_prices(ticker, period_sel, interval_sel)
         if px.empty:
             st.error(f"No data for '{ticker}'"); st.stop()
@@ -582,6 +599,7 @@ with tab_engine:
 
         # MTF Confirmation (no DeltaGenerator repr)
         with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
+            mtf_ok = False
             try:
                 d1 = compute_indicators(load_prices(ticker, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
                 dH = compute_indicators(load_prices(ticker, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
@@ -597,17 +615,14 @@ with tab_engine:
                         mtf_ok = True
                     else:
                         st.warning("⚠️ Signals disagree")
-                        mtf_ok = False
             except Exception as e:
                 st.error(f"MTF error: {e}")
-                mtf_ok = False
 
         # Earnings Radar
         with st.expander("📈 Earnings Radar — historical behavior", expanded=False):
             try:
                 px_full = load_prices(ticker, "5y", "1d")
-                er_df   = safe_earnings(ticker)
-                stats   = earnings_event_study(px_full, er_df, 5, 5)
+                stats   = earnings_event_study(px_full, er_table, 5, 5)
                 if stats:
                     st.write(f"Events analyzed: **{stats['n_events']}**")
                     st.write(f"Avg gap: **{stats['gap_mean_pct']:.2f}%**  | Next-day mean: **{stats['next_day_mean_pct']:.2f}%**  | Hit-rate: **{stats['next_day_hit_rate']:.1f}%**")
@@ -641,8 +656,8 @@ with tab_engine:
                 v, cv = var_cvar(r_, 0.05)
                 st.write(f"5% Historical VaR (1-bar): **{v*100:.2f}%**  | CVaR: **{cv*100:.2f}%**")
                 atr_latest = float(df_c["ATR"].iloc[-1]) if "ATR" in df_c and not df_c["ATR"].empty else np.nan
-                capital    = st.number_input("Account size ($)", 1000, 10_000_000, 50_000, step=1000, key="risk_cap_v20")
-                stop_x     = st.slider("Stop distance (ATR×)", 0.5, 5.0, float(sl_atr_mult or 2.0), 0.5, key="risk_stopx_v20")
+                capital    = st.number_input("Account size ($)", 1000, 10_000_000, 50_000, step=1000, key="risk_cap_v21")
+                stop_x     = st.slider("Stop distance (ATR×)", 0.5, 5.0, float(sl_atr_mult or 2.0), 0.5, key="risk_stopx_v21")
                 px_latest  = float(df_c["Close"].iloc[-1])
                 qty        = position_size(capital, px_latest, atr_latest, stop_x, 0.01)
                 st.write(f"Suggested size (1% risk, ATR stop): **{qty:,.0f}** shares")
@@ -652,8 +667,7 @@ with tab_engine:
         with st.expander("🧭 Confidence Gauge", expanded=True):
             try:
                 comp_last = float(df_sig["Composite"].iloc[-1]) if "Composite" in df_sig else 0.0
-                # Reuse MTF result if set; else compute quick
-                mtf_agree = 'mtf_ok' in locals() and isinstance(mtf_ok, bool) and mtf_ok
+                mtf_agree = locals().get("mtf_ok", False)
                 senti = float(avg_sent) if isinstance(avg_sent, float) else 0.0
                 sc, label = confidence_score(comp_last, mtf_agree, senti)
                 st.metric("Confidence", f"{sc}/100", label)
@@ -663,8 +677,8 @@ with tab_engine:
     # Batch Backtest
     st.markdown("---")
     st.markdown("### Batch Backtest")
-    batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ", key="ta_batch_v20").upper()
-    if st.button("▶️ Run Batch Backtest", key="btn_batch_v20"):
+    batch = st.text_area("Tickers (comma-separated)", "AAPL, MSFT, TSLA, SPY, QQQ", key="ta_batch_v21").upper()
+    if st.button("▶️ Run Batch Backtest", key="btn_batch_v21"):
         perf=[]
         for t in [x.strip() for x in batch.split(",") if x.strip()]:
             px = load_prices(t, period_sel, interval_sel)
@@ -696,7 +710,7 @@ with tab_engine:
         if perf:
             df_perf = pd.DataFrame(perf).set_index("Ticker").sort_values("Strategy %", ascending=False)
             st.dataframe(df_perf, use_container_width=True)
-            st.download_button("Download CSV", df_perf.to_csv(), "batch.csv", key="dl_batch_v20")
+            st.download_button("Download CSV", df_perf.to_csv(), "batch.csv", key="dl_batch_v21")
         else:
             st.error("No valid data for batch tickers.")
 
@@ -705,12 +719,12 @@ with tab_ml:
     st.title("🧠 ML Lab — Probabilistic Signals")
     if not SKLEARN_OK:
         st.warning("scikit-learn not installed. Run: pip install scikit-learn")
-    symbol = st.text_input("Symbol (ML)", value="AAPL", key="inp_ml_symbol_v20").upper()
-    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="ml_horizon_v20")
-    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="ml_train_frac_v20")
-    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="ml_p_enter_v20")
-    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="ml_p_exit_v20")
-    run_ml = st.button("🤖 Train & Backtest", key="btn_ml_run_v20")
+    symbol = st.text_input("Symbol (ML)", value="AAPL", key="inp_ml_symbol_v21").upper()
+    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="ml_horizon_v21")
+    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="ml_train_frac_v21")
+    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="ml_p_enter_v21")
+    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="ml_p_exit_v21")
+    run_ml = st.button("🤖 Train & Backtest", key="btn_ml_run_v21")
 
     def _ml_features(d: pd.DataFrame) -> pd.DataFrame:
         out = pd.DataFrame(index=d.index)
@@ -787,9 +801,9 @@ with tab_scan:
     st.title("📡 Universe Scanner — Composite + (optional) ML")
     universe = st.text_area("Tickers (comma-separated)",
                             "AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, NFLX, SPY, QQQ",
-                            key="ta_scan_universe_v20").upper()
-    use_ml_scan = st.toggle("Include ML probability (needs scikit-learn)", value=False, key="tg_ml_scan_v20")
-    run_scan = st.button("🔎 Scan", key="btn_scan_v20")
+                            key="ta_scan_universe_v21").upper()
+    use_ml_scan = st.toggle("Include ML probability (needs scikit-learn)", value=False, key="tg_ml_scan_v21")
+    run_scan = st.button("🔎 Scan", key="btn_scan_v21")
 
     if run_scan:
         rows=[]
@@ -830,8 +844,8 @@ with tab_scan:
 # ───────────────────────────── REGIMES ─────────────────────────────
 with tab_regime:
     st.title("📉 Regime Detection — Vol/Momentum Clusters")
-    sym = st.text_input("Symbol (Regime)", value="SPY", key="inp_regime_symbol_v20").upper()
-    run_rg = st.button("Cluster Regimes", key="btn_regimes_v20")
+    sym = st.text_input("Symbol (Regime)", value="SPY", key="inp_regime_symbol_v21").upper()
+    run_rg = st.button("Cluster Regimes", key="btn_regimes_v21")
 
     if run_rg:
         try:
@@ -872,8 +886,8 @@ with tab_port:
     st.title("💼 Portfolio — Optimizers & Monte Carlo")
 
     st.subheader("⚖️ Risk Parity Optimizer")
-    opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="inp_opt_tickers_v20").upper()
-    if st.button("🧮 Optimize (Risk Parity)", key="btn_opt_rp_v20"):
+    opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="inp_opt_tickers_v21").upper()
+    if st.button("🧮 Optimize (Risk Parity)", key="btn_opt_rp_v21"):
         try:
             tickers = [t.strip() for t in opt_tickers.split(",") if t.strip()]
             rets = []; valid = []
@@ -907,9 +921,9 @@ with tab_port:
             st.error(f"Optimizer error: {e}")
 
     st.subheader("🎲 Monte Carlo (Bootstrap) of Strategy Returns")
-    mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="inp_mc_symbol_v20").upper()
-    n_paths = st.slider("Paths", 200, 3000, 800, 100, key="mc_paths_v20")
-    run_mc = st.button("Run Monte Carlo", key="btn_mc_v20")
+    mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="inp_mc_symbol_v21").upper()
+    n_paths = st.slider("Paths", 200, 3000, 800, 100, key="mc_paths_v21")
+    run_mc = st.button("Run Monte Carlo", key="btn_mc_v21")
 
     if run_mc:
         try:
