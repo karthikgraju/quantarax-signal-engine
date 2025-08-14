@@ -202,7 +202,10 @@ def gather_news(sym: str, limit: int = 8) -> list:
         items.extend(_try_parse_rss(u))
     return _dedup_news(items, limit)
 
-# -------------- Earnings (UTC-safe + override + sanity) --------------
+# ---------- Earnings (UTC-safe + override + projection; NEVER past) ----------
+from typing import Optional, Tuple
+import math
+
 def parse_date_str(s: str) -> Optional[pd.Timestamp]:
     s = (s or "").strip()
     if not s:
@@ -214,56 +217,102 @@ def parse_date_str(s: str) -> Optional[pd.Timestamp]:
         return None
 
 def next_earnings_date(symbol: str, manual_override: Optional[str] = None) -> Tuple[Optional[pd.Timestamp], str]:
+    """
+    Returns the next earnings date (UTC-normalized, never in the past) and a note:
+      - "ok": from provider, future date
+      - "projected": estimated from historical cadence when no future date exists
+      - "manual-override": user supplied a future date
+      - "manual-override-past": user supplied a past date (we still show it but tag it)
+      - "unavailable" | "error": no info
+      - "low-confidence": provider date is oddly far out
+    """
+    today = pd.Timestamp.now(tz="UTC").normalize()
+
+    # 1) Manual override takes priority
     ov = parse_date_str(manual_override)
     if ov is not None:
-        return ov, "manual-override"
+        return (ov, "manual-override" if ov >= today else "manual-override-past")
+
+    # 2) Pull provider dates (yfinance)
     try:
-        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=16)
+        cal = yf.Ticker(_map_symbol(symbol)).get_earnings_dates(limit=24)
         if not isinstance(cal, pd.DataFrame) or cal.empty:
             return None, "unavailable"
+
         df = cal.copy()
         if isinstance(df.index, pd.DatetimeIndex):
             df = df.reset_index()
-        # find date column
+
+        # find the date column robustly
         date_col = None
         for c in df.columns:
             cl = str(c).lower().replace(" ", "")
             if "earn" in cl and "date" in cl:
                 date_col = c; break
         if date_col is None:
-            # first datetime-like column else first column
             for c in df.columns:
                 if pd.api.types.is_datetime64_any_dtype(df[c]) or "date" in str(c).lower():
                     date_col = c; break
         if date_col is None:
             date_col = df.columns[0]
-        # normalize to UTC midnight
+
         df["earn_date"] = pd.to_datetime(df[date_col], utc=True, errors="coerce").dt.normalize()
-        df = df.dropna(subset=["earn_date"]).sort_values("earn_date")
-        if df.empty:
+        dates = df["earn_date"].dropna().drop_duplicates().sort_values()
+        if dates.empty:
             return None, "unavailable"
-        today = pd.Timestamp.now(tz="UTC").normalize()
-        future = df[df["earn_date"] >= today]
-        ed = (future["earn_date"].iloc[0] if not future.empty else df["earn_date"].iloc[-1])
-        # annotate confidence
-        days = int((ed - today).days)
-        if abs(days) > 200:
-            note = "low-confidence"
-        elif days < -5:
-            note = "stale"
-        else:
-            note = "ok"
-        return ed, note
+
+        # 3) Prefer the first FUTURE date
+        future = dates[dates >= today]
+        if not future.empty:
+            ed = pd.Timestamp(future.iloc[0])
+            # sanity note
+            days_ahead = int((ed - today).days)
+            note = "low-confidence" if days_ahead > 200 else "ok"
+            return ed, note
+
+        # 4) No future date? → Project using cadence from recent quarters
+        #    Use median of last few intervals; clamp cadence to [45, 120] days
+        diffs = dates.diff().dropna().dt.days
+        cadence = float(np.median(diffs.tail(4))) if len(diffs) else 90.0
+        cadence = min(max(cadence, 45.0), 120.0)  # clamp
+        last = pd.Timestamp(dates.iloc[-1])
+        # advance by enough cadences to get into the future
+        n_steps = max(1, math.ceil((today - last).days / cadence)) if today > last else 1
+        proj = (last + pd.Timedelta(days=int(cadence * n_steps))).normalize()
+        return proj, "projected"
+
     except Exception:
         return None, "error"
 
 def render_next_earnings(symbol: str, manual_override: Optional[str] = None) -> None:
     ed, note = next_earnings_date(symbol, manual_override=manual_override)
+    badge = {
+        "ok": "✅",
+        "projected": "🧮",
+        "manual-override": "✏️",
+        "manual-override-past": "✏️",
+        "stale": "⚠️",
+        "low-confidence": "❓",
+        "unavailable": "—",
+        "error": "—",
+    }.get(note, "—")
+
     if ed is None:
         st.info("📅 Earnings: unavailable", icon="🗓️")
         return
-    badge = {"ok":"✅", "manual-override":"✏️", "stale":"⚠️", "low-confidence":"❓", "unavailable":"—", "error":"—"}.get(note, "—")
-    st.info(f"{badge} Next Earnings: **{ed.date()}**  *(note: {note})*", icon="🗓️")
+
+    # Ensure we never show a past date as "Next"
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    if ed < today and note not in ("manual-override-past",):
+        # Defensive guard: if somehow a past date slips through, show TBD
+        st.info(f"{badge} Next Earnings: **TBD**  *(note: {note})*", icon="🗓️")
+    else:
+        label = "Next Earnings"
+        if note == "projected":
+            label += " (projected)"
+        elif note == "manual-override-past":
+            label += " (override is in the past)"
+        st.info(f"{badge} {label}: **{ed.date()}**  *(note: {note})*", icon="🗓️")
 
 # -------------- Indicators / Composite --------------
 def compute_indicators(df: pd.DataFrame, ma_w: int, rsi_p: int, mf: int, ms: int, sig: int,
