@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro v27 (all-in-one, hardened)
+# app.py — QuantaraX Pro v28 (all-in-one, hardened)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn
@@ -45,7 +45,7 @@ except Exception:
     REPORTLAB_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v27", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v28", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
@@ -641,7 +641,7 @@ with tab_engine:
             cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
             mtf_agree = int(np.sign(c1["Composite"].iloc[-1])) == int(np.sign(cH["Composite"].iloc[-1]))
 
-        # Regime check (quick 3-cluster by vol/mom/MA slope; "green" if best)
+        # Regime check
         in_good_regime = None
         try:
             ind_rg = compute_indicators(load_prices(ticker, "2y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=False)
@@ -877,6 +877,93 @@ with tab_engine:
             st.download_button("Download CSV", df_perf.to_csv(), "batch.csv", key="dl_batch")
         else:
             st.error("No valid data for batch tickers.")
+
+# ───────────────────────────── ML LAB ─────────────────────────────
+with tab_ml:
+    st.title("🧠 ML Lab — Probabilistic Signals")
+    if not SKLEARN_OK:
+        st.warning("scikit-learn not installed. Run: pip install scikit-learn")
+
+    symbol = st.text_input("Symbol (ML)", value="AAPL", key="inp_ml_symbol").upper()
+    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="ml_horizon")
+    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="ml_train_frac")
+    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="ml_p_enter")
+    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="ml_p_exit")
+    run_ml = st.button("🤖 Train & Backtest", key="btn_ml_run")
+
+    def _ml_features(d: pd.DataFrame) -> pd.DataFrame:
+        out = pd.DataFrame(index=d.index)
+        out["ret1"] = d["Close"].pct_change()
+        out["ret5"] = d["Close"].pct_change(5)
+        out["vol20"] = d["Close"].pct_change().rolling(20).std()
+        out["rsi"] = d.get(f"RSI{rsi_period}", np.nan)
+        out["macd"] = d.get("MACD", np.nan)
+        out["sto_k"] = d.get("STO_K", np.nan)
+        out["adx"] = d.get("ADX", np.nan)
+        if {"BB_U","BB_L"}.issubset(d.columns):
+            rng = (d["BB_U"] - d["BB_L"]).replace(0, np.nan)
+            out["bb_pos"] = (d["Close"] - d["BB_L"]) / rng
+        else:
+            out["bb_pos"] = np.nan
+        return out.dropna()
+
+    if run_ml:
+        try:
+            if not SKLEARN_OK:
+                st.stop()
+            px = load_prices(symbol, period_sel, interval_sel)
+            ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            if ind.empty: st.error("Not enough data for indicators."); st.stop()
+            X = _ml_features(ind)
+            y = (ind["Close"].pct_change(horizon).shift(-horizon) > 0).reindex(X.index).astype(int)
+            data = pd.concat([X, y.rename("y")], axis=1).dropna()
+            if len(data) < 200:
+                st.warning("Not enough rows for ML. Try longer history or daily interval."); st.stop()
+            split = int(len(data) * float(train_frac))
+            train, test = data.iloc[:split], data.iloc[split:]
+            clf = RandomForestClassifier(n_estimators=400, max_depth=6, random_state=42, n_jobs=-1)
+            clf.fit(train.drop(columns=["y"]), train["y"])
+            proba = clf.predict_proba(test.drop(columns=["y"]))[:,1]
+            y_true= test["y"].values
+            acc = accuracy_score(y_true, (proba>0.5).astype(int))
+            try:
+                auc = roc_auc_score(y_true, proba)
+            except Exception:
+                auc = np.nan
+
+            st.subheader("Out-of-sample performance")
+            c1,c2 = st.columns(2)
+            c1.metric("Accuracy (0.5)", f"{acc*100:.1f}%")
+            c2.metric("ROC-AUC", f"{(0 if np.isnan(auc) else auc):.3f}")
+
+            # Permutation importance
+            try:
+                pim = permutation_importance(clf, test.drop(columns=["y"]), y_true, n_repeats=5, random_state=42)
+                imp = pd.Series(pim.importances_mean, index=test.drop(columns=["y"]).columns).sort_values(ascending=False)
+                st.bar_chart(imp)
+            except Exception:
+                st.info("Permutation importance unavailable.")
+
+            # Convert ML probs to trades and backtest
+            if allow_short:
+                sig = np.where(proba >= proba_enter, 1, np.where(proba <= proba_exit, -1, 0))
+            else:
+                sig = np.where(proba >= proba_enter, 1, 0)
+            ml_df = ind.loc[test.index].copy()
+            ml_df["Trade"] = pd.Series(sig, index=ml_df.index, dtype=int)
+            bt, md, sh, wr, trd, tim, cagr = backtest(ml_df, allow_short=allow_short, cost_bps=cost_bps,
+                                                       sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
+                                                       vol_target=vol_target, interval=interval_sel)
+            st.markdown(f"**ML Strategy OOS:** Return={(bt['CumStrat'].iloc[-1]-1)*100:.2f}% | Sharpe={sh:.2f} | MaxDD={md:.2f}% | Trades={trd}")
+            fig, ax = plt.subplots(figsize=(9,3))
+            ax.plot(bt.index, bt["CumBH"], ":", label="BH"); ax.plot(bt.index, bt["CumStrat"], label="ML Strat"); ax.legend(); ax.set_title("ML OOS Equity")
+            st.pyplot(fig)
+
+            # Latest probability on the most recent full feature row
+            latest_p = clf.predict_proba(data.drop(columns=["y"]).tail(1))[:,1][0]
+            st.info(f"Latest P(long) = {latest_p:.3f}")
+        except Exception as e:
+            st.error(f"ML error: {e}")
 
 # ───────────────────────────── SCANNER ─────────────────────────────
 with tab_scan:
