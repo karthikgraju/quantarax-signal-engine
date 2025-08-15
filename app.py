@@ -649,27 +649,69 @@ def pattern_checks(df: pd.DataFrame) -> List[str]:
 
 # Macro dashboard
 def macro_dashboard():
-    tickers = ["SPY","TLT","HYG","DXY","GLD","USO"]
+    # Try multiple symbols for "DXY" because Yahoo’s naming varies by region.
+    macro_candidates = {
+        "SPY": ["SPY"],
+        "TLT": ["TLT"],
+        "HYG": ["HYG"],
+        "DXY": ["DXY", "DX-Y.NYB", "DX=F"],  # fallbacks for Dollar Index
+        "GLD": ["GLD"],
+        "USO": ["USO"],
+    }
+
     data = {}
-    for t in tickers:
-        px = load_prices(t, "1y", "1d")
-        if px.empty: continue
-        data[t] = px["Close"]
+    for label, candidates in macro_candidates.items():
+        series = None
+        for sym in candidates:
+            px = load_prices(sym, "1y", "1d")
+            if not px.empty and "Close" in px:
+                series = px["Close"].rename(label)
+                break
+        if series is not None:
+            data[label] = series
+
     if len(data) < 3:
-        st.info("Macro dashboard needs more data availability."); return
-    df = pd.DataFrame(data).dropna()
-    ytd = (df / df[df.index[df.index.year == df.index[-1].year][0]] - 1).iloc[-1] if (df.index.year==df.index[-1].year).any() else (df.pct_change(252).iloc[-1])
-    m1  = df.pct_change(21).iloc[-1]
+        st.info("Macro dashboard needs at least 3 valid series (SPY/TLT/HYG/DXY/GLD/USO).")
+        return
+
+    # Align on common dates and drop rows where everything is NaN
+    df = pd.concat(data.values(), axis=1).dropna(how="all")
+    if df.empty or len(df) < 2:
+        st.info("Not enough macro data to compute metrics.")
+        return
+
+    # --- Robust YTD computation ---
+    # Find the first trading day of the *current* year present in df
+    last_year = int(df.index[-1].year)
+    mask_cur_year = (df.index.year == last_year)
+    if mask_cur_year.any():
+        first_date_idx = np.argmax(mask_cur_year)  # first True position
+        first_date = df.index[first_date_idx]
+        # Use .loc to select the *row* (baseline vector), not a column
+        base_row = df.loc[first_date].replace(0, np.nan)  # guard div-by-zero
+        ytd = ((df / base_row) - 1).iloc[-1]
+    else:
+        # Fallback: approximate “YTD” as trailing ~252 sessions
+        ytd = df.pct_change(252).iloc[-1]
+
+    # 1-month momentum proxy (~21 trading days)
+    m1 = df.pct_change(21).iloc[-1]
+
+    # --- Heuristic risk score ---
     score = 0
-    score += 1 if ytd.get("SPY",0)>0 else -1
-    score += 1 if m1.get("HYG",0)>0 else -1
-    score += 1 if ytd.get("TLT",0)>0 else 0
-    score += 1 if m1.get("GLD",0)>0 else 0
-    score += -1 if m1.get("DXY",0)>0 else 1  # weaker dollar -> risk-on
-    score += 1 if m1.get("USO",0)>0 else 0
+    score += 1 if ytd.get("SPY", 0) > 0 else -1
+    score += 1 if m1.get("HYG", 0) > 0 else -1
+    score += 1 if ytd.get("TLT", 0) > 0 else 0
+    score += 1 if m1.get("GLD", 0) > 0 else 0
+    score += -1 if m1.get("DXY", 0) > 0 else 1   # weaker dollar → risk-on
+    score += 1 if m1.get("USO", 0) > 0 else 0
+
     risk_state = "Risk-ON" if score >= 2 else ("Neutral" if -1 <= score < 2 else "Risk-OFF")
     st.subheader(f"🌍 Macro Dashboard — {risk_state}")
-    st.write(pd.DataFrame({"YTD": ytd*100, "1M": m1*100}).round(2))
+
+    table = pd.DataFrame({"YTD %": (ytd * 100).round(2), "1M %": (m1 * 100).round(2)})
+    st.dataframe(table, use_container_width=True)
+
 
 # ───────────────────────────── ENGINE ─────────────────────────────
 with tab_engine:
