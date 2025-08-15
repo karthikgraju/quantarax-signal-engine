@@ -1,15 +1,15 @@
-# app.py — QuantaraX Pro v32 (all-in, investor-ready)
+# app.py — QuantaraX Pro v40 (investor-ready, single file)
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn reportlab
-# (reportlab optional; falls back to HTML reports)
+# (reportlab optional; we fall back to HTML export if missing)
 
 import io
 import json
 import math
 import time
 import warnings
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import streamlit as st
 import yfinance as yf
@@ -41,18 +41,17 @@ except Exception:
     REPORTLAB_OK = False
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v32", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v40", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
-# Tabs
 TAB_TITLES = ["🚀 Engine", "🧠 ML Lab", "📡 Scanner", "📉 Regimes", "💼 Portfolio", "❓ Help"]
 (tab_engine, tab_ml, tab_scan, tab_regime, tab_port, tab_help) = st.tabs(TAB_TITLES)
 
 # ───────────────────────────── Sidebar ─────────────────────────────
 st.sidebar.header("Mode & Global Controls")
 
-# Beginner/Pro (kept in sidebar only)
+# Beginner/Pro (kept in sidebar only; never printed on main)
 user_mode = st.sidebar.radio("Experience mode", ["Beginner", "Pro"], index=0, key="mode_select")
 
 # Strategy presets
@@ -66,13 +65,12 @@ PRESETS = {
 }
 chosen_preset = st.sidebar.selectbox("Strategy preset", list(PRESETS.keys()), index=0, key="preset_choice")
 
-# Defaults (will be overridden by preset when you press 'Apply preset')
+# Defaults (overridden when pressing 'Apply preset')
 DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9)
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Apply preset button
 if st.sidebar.button("⚙️ Apply preset", key="btn_apply_preset"):
     p = PRESETS[chosen_preset]
     st.session_state["ma_window"] = p["ma_window"]
@@ -106,7 +104,7 @@ macd_signal = st.sidebar.slider("MACD sig span",  5, 20, st.session_state["macd_
 
 st.sidebar.subheader("Composite v2 (advanced)")
 use_weighted = st.sidebar.toggle("Use weighted composite", value=True, key="use_weighted")
-include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=True if "include_bb" not in st.session_state else bool(st.session_state["include_bb"]), key="include_bb")
+include_bb   = st.sidebar.toggle("Include Bollinger Bands", value=bool(st.session_state.get("include_bb", True)), key="include_bb")
 w_ma   = st.sidebar.slider("Weight • MA",   0.0, 2.0, float(st.session_state.get("w_ma", 1.0)), 0.1, key="w_ma")
 w_rsi  = st.sidebar.slider("Weight • RSI",  0.0, 2.0, float(st.session_state.get("w_rsi",1.0)), 0.1, key="w_rsi")
 w_macd = st.sidebar.slider("Weight • MACD", 0.0, 2.0, float(st.session_state.get("w_macd",1.0)),0.1, key="w_macd")
@@ -252,14 +250,12 @@ def fetch_news_bundle(symbol: str, max_items: int = 12) -> List[dict]:
         pass
 
     if not out: return []
-    # De-dup
+    # De-dup + sentiment + sort
     seen = set(); dedup=[]
     for a in out:
         key = a["link"] or a["title"]
         if key in seen: continue
         seen.add(key); dedup.append(a)
-
-    # Sentiment + newest first
     for a in dedup:
         txt = a.get("summary") or a.get("title") or ""
         a["sentiment"] = analyzer.polarity_scores(txt)["compound"]
@@ -540,10 +536,11 @@ def confidence_score_side(comp_value: float, comp_max: float,
     score = 100 * (0.45*s_comp + 0.25*s_mtf + 0.20*s_news + 0.10*s_reg)
     return int(round(max(0, min(100, score))))
 
-# Factor / ETF exposures
+# Factor / ETF exposures (expanded)
 @st.cache_data(show_spinner=False, ttl=1200)
 def factor_lens(symbol: str, lookback="1y") -> Optional[pd.Series]:
-    tickers = ["SPY","IWM","IWD","MTUM"]
+    # broad: SPY (market), IWM (size/small), IWD (value), MTUM (momentum), QUAL (quality), USMV (min- vol)
+    tickers = ["SPY","IWM","IWD","MTUM","QUAL","USMV"]
     data = {}
     for t in [symbol] + tickers:
         px = load_prices(t, period=lookback, interval="1d")
@@ -560,6 +557,38 @@ def factor_lens(symbol: str, lookback="1y") -> Optional[pd.Series]:
         return b
     except Exception:
         return None
+
+# Position sizing by ATR risk
+def position_size_by_atr(account_equity: float, risk_pct: float, atr: float, atr_mult: float, price: float) -> int:
+    """
+    Dollar risk per share ≈ ATR * atr_mult. Shares = (account_equity * risk_pct) / (atr * atr_mult)
+    """
+    if atr <= 0 or atr_mult <= 0 or price <= 0:
+        return 0
+    dollars_at_risk = account_equity * risk_pct
+    risk_per_share = atr * atr_mult
+    shares = int(max(0, dollars_at_risk / risk_per_share))
+    return shares
+
+# Rebalance to target weights → orders
+def rebalance_orders(current: pd.DataFrame, target_weights: pd.Series) -> pd.DataFrame:
+    """
+    current index: tickers, with columns ['Shares','Price','Market Value']
+    target_weights: desired weights summing to 1.0
+    Returns orders DataFrame with 'Target $', 'Delta $', 'Delta shares', 'Action'
+    """
+    total_mv = current["Market Value"].sum()
+    tgt_dollars = target_weights * total_mv
+    delta_dollars = tgt_dollars - current["Market Value"].reindex(target_weights.index).fillna(0.0)
+    delta_shares = delta_dollars / current["Price"].reindex(target_weights.index).replace(0, np.nan)
+    orders = pd.DataFrame({"Target $": tgt_dollars, "Delta $": delta_dollars, "Delta shares": delta_shares})
+    def act(x):
+        if pd.isna(x): return "HOLD"
+        if x >  0: return "BUY"
+        if x <  0: return "SELL"
+        return "HOLD"
+    orders["Action"] = orders["Delta $"].apply(act)
+    return orders
 
 # PDF/HTML Report
 def build_report(title_suffix: str, advice_rows: List[dict], context_lines: List[str]) -> Tuple[str, bytes, str]:
@@ -605,16 +634,16 @@ def build_report(title_suffix: str, advice_rows: List[dict], context_lines: List
 with tab_engine:
     st.title("🚀 QuantaraX — Composite Signal Engine")
 
-    # Quick pins / Watchlist
+    # Watchlist
     wl_col1, wl_col2 = st.columns([3,1])
     with wl_col1:
-        st.markdown("### Single‐Ticker Backtest")
+        st.markdown("### Single-Ticker Backtest")
     with wl_col2:
         watchlist = st.text_input("Watchlist (comma-sep)", "AAPL, NVDA, TSLA", key="wl_list").upper()
 
     ticker = st.text_input("Symbol", "AAPL", key="inp_engine_ticker").upper()
 
-    # Live (last close) + freshness
+    # Live price + freshness
     px_live = load_prices(ticker, "5d", "1d")
     if not px_live.empty and "Close" in px_live:
         last_px = _to_float(px_live["Close"].iloc[-1])
@@ -622,10 +651,8 @@ with tab_engine:
         fresh = "fresh" if (meta["fresh_hours"] is not None and meta["fresh_hours"] < 48) else "stale"
         st.subheader(f"💲 Last close: ${last_px:.2f}  ·  Data: {fresh} ({meta['bars']} bars)")
 
-    # News
+    # News & Earnings
     render_news(ticker, expand=(user_mode == "Beginner"))
-
-    # Earnings
     next_e, last_e, is_est = next_earnings_date(ticker)
     if next_e is not None:
         tag = " (est.)" if is_est else ""
@@ -653,7 +680,7 @@ with tab_engine:
             df_w = pd.DataFrame(rows).set_index("Ticker").sort_values("Composite", ascending=False)
             st.dataframe(df_w, use_container_width=True)
 
-    # Run backtest
+    # Backtest
     if st.button("▶️ Run Composite Backtest", key="btn_engine_backtest"):
         px = load_prices(ticker, period_sel, interval_sel)
         if px.empty:
@@ -676,7 +703,7 @@ with tab_engine:
             sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult, vol_target=vol_target, interval=interval_sel
         )
 
-        # Summary cards
+        # Summary metrics
         bh_last    = float(df_c["CumBH"].tail(1).iloc[0])  if "CumBH" in df_c and not df_c["CumBH"].empty else 1.0
         strat_last = float(df_c["CumStrat"].tail(1).iloc[0]) if "CumStrat" in df_c and not df_c["CumStrat"].empty else 1.0
 
@@ -689,14 +716,14 @@ with tab_engine:
         cF.metric("Time in Mkt", f"{tim:.1f}%")
         st.markdown(f"- **Buy & Hold:** {(bh_last-1)*100:.2f}%  \n- **Strategy:** {(strat_last-1)*100:.2f}%")
 
-        # Last signal
+        # Signal + dual confidence
         last_trade = int(df_sig["Trade"].tail(1).iloc[0]) if "Trade" in df_sig.columns and not df_sig.empty else 0
         rec = rec_map.get(1 if last_trade>0 else (-1 if last_trade<0 else 0), "🟡 HOLD")
 
-        # MTF agree → side-specific
+        # MTF agree (daily vs hourly)
         d1 = compute_indicators(load_prices(ticker, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
         dH = compute_indicators(load_prices(ticker, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-        mtf_long = None; mtf_short = None
+        mtf_long = mtf_short = None
         if not d1.empty and not dH.empty:
             c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
             cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
@@ -704,8 +731,8 @@ with tab_engine:
             mtf_long  = (s1 > 0 and sH > 0)
             mtf_short = (s1 < 0 and sH < 0)
 
-        # Regime favorability → side-specific
-        long_good = None; short_good = None
+        # Regime favorability
+        long_good = short_good = None
         try:
             ind_rg = compute_indicators(load_prices(ticker, "2y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=False)
             if not ind_rg.empty:
@@ -730,13 +757,12 @@ with tab_engine:
         except Exception:
             pass
 
-        # Dual confidence
+        # Confidence
         comp_val = float(df_sig["Composite"].iloc[-1])
         comp_max = (w_ma + w_rsi + w_macd + (w_bb if include_bb else 0.0)) if use_weighted else 3.0
         news_items = fetch_news_bundle(ticker)[:5]
         conf_long  = confidence_score_side(comp_val, comp_max, mtf_long,  news_items, long_good,  "long")
         conf_short = confidence_score_side(comp_val, comp_max, mtf_short, news_items, short_good, "short")
-
         st.success(f"**{ticker}**: {rec}  ·  Confidence — Long **{conf_long}/100** | Short **{conf_short}/100**")
 
         # Why this signal?
@@ -765,6 +791,19 @@ with tab_engine:
                 st.write(f"- **MTF:** Long-agree: {'✅' if mtf_long else '⚠️'} | Short-agree: {'✅' if mtf_short else '⚠️'}")
             if long_good is not None and short_good is not None:
                 st.write(f"- **Regime:** Long favorable: {'✅' if long_good else '⚠️'} | Short favorable: {'✅' if short_good else '⚠️'}")
+
+        # Confidence breakdown chart (for this ticker)
+        with st.expander("📊 Confidence Breakdown", expanded=(user_mode=="Pro")):
+            parts = {
+                "Composite": (max(0.0, comp_val)/max(1.0, comp_max)) if comp_val>=0 else (max(0.0, -comp_val)/max(1.0, comp_max)),
+                "MTF agree": 1.0 if (mtf_long or mtf_short) else 0.0 if (mtf_long==False or mtf_short==False) else 0.5,
+                "News": (np.mean([a.get("sentiment",0.0) for a in news_items])+1)/2 if news_items else 0.5,
+                "Regime": 1.0 if (long_good or short_good) else 0.0 if (long_good==False or short_good==False) else 0.5
+            }
+            fig, ax = plt.subplots(figsize=(5,3))
+            ax.bar(list(parts.keys()), list(parts.values()))
+            ax.set_ylim(0,1); ax.set_ylabel("Score (0–1)"); ax.set_title("Components")
+            plt.tight_layout(); st.pyplot(fig)
 
         # Plots
         idx = df_c.index
@@ -813,6 +852,36 @@ with tab_engine:
                 fig, ax = plt.subplots(figsize=(6,3))
                 b.plot(kind="bar", ax=ax); ax.set_title("Factor Loadings vs ETFs"); plt.tight_layout()
                 st.pyplot(fig)
+
+    with st.expander("📏 Position Sizing (ATR-risk)", expanded=False):
+        eq = st.number_input("Account equity ($)", 10000.0, step=1000.0, key="ps_eq")
+        risk_pct = st.slider("Risk per trade (%)", 0.1, 5.0, 1.0, 0.1, key="ps_riskpct") / 100.0
+        atr_mult_ps = st.slider("ATR multiple (stop distance)", 0.5, 5.0, 2.0, 0.5, key="ps_atr")
+        if st.button("Compute Size", key="btn_ps"):
+            px = load_prices(ticker, period_sel, interval_sel)
+            ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            if ind.empty or "ATR" not in ind: st.warning("Need more data for ATR."); st.stop()
+            atr = float(ind["ATR"].iloc[-1]); price = float(ind["Close"].iloc[-1])
+            shares = position_size_by_atr(eq, risk_pct, atr, atr_mult_ps, price)
+            st.info(f"ATR≈{atr:.2f}. Suggested max position ~ **{shares} shares** @ ${price:.2f} for {risk_pct*100:.1f}% risk.")
+
+    with st.expander("🧩 Options Snapshot (best-effort)", expanded=False):
+        sym_opt = st.text_input("Symbol (Options)", value=ticker, key="opt_sym")
+        if st.button("Fetch Chain", key="btn_opt_fetch"):
+            try:
+                T = yf.Ticker(_map_symbol(sym_opt))
+                exps = getattr(T, "options", [])
+                if not exps:
+                    st.info("No options expiries available.")
+                else:
+                    exp = exps[0]
+                    calls = T.option_chain(exp).calls.head(10)
+                    puts  = T.option_chain(exp).puts.head(10)
+                    st.write(f"Expiry: {exp}")
+                    st.write("Calls (top 10):"); st.dataframe(calls)
+                    st.write("Puts (top 10):");  st.dataframe(puts)
+            except Exception as e:
+                st.warning(f"Options fetch error: {e}")
 
 # ───────────────────────────── ML LAB ─────────────────────────────
 with tab_ml:
@@ -994,9 +1063,9 @@ with tab_regime:
 
 # ───────────────────────────── PORTFOLIO ─────────────────────────────
 with tab_port:
-    st.title("💼 Portfolio — Optimizers, Advisor, Risk & Reports")
+    st.title("💼 Portfolio — Optimizers, Advisor, Risk, Reports")
 
-    # Risk parity
+    # Risk parity optimizer
     st.subheader("⚖️ Risk Parity Optimizer")
     opt_tickers = st.text_input("Tickers (comma-sep)", "AAPL, MSFT, TSLA, SPY, QQQ", key="inp_opt_tickers").upper()
     if st.button("🧮 Optimize (Risk Parity)", key="btn_opt_rp"):
@@ -1087,7 +1156,7 @@ with tab_port:
             invested=shares*cost; value=shares*price; pnl=value-invested
             pnl_pct=(pnl/invested*100) if invested else np.nan
 
-            # Composite suggestion, reason, and dual confidence
+            # Composite suggestion, reason, confidence
             px = load_prices(tkr, period_sel, interval_sel)
             comp_sugg="N/A"; score=np.nan; reason=""; confL=np.nan; confS=np.nan
             if not px.empty:
@@ -1102,9 +1171,7 @@ with tab_port:
                         comp_sugg = "🟢 BUY" if score>=comp_thr else ("🔴 SELL" if score<=-comp_thr else "🟡 HOLD")
                         last = df_csig.tail(1).iloc[0]
                         reason = "MA:{} | RSI:{} | MACD:{}".format(int(last.get("MA_Signal",0)), int(last.get("RSI_Signal",0)), int(last.get("MACD_Signal2",0)))
-                        # Dual confidence for each holding
-                        comp_max_local = (w_ma + w_rsi + w_macd + (w_bb if include_bb else 0.0)) if use_weighted else 3.0
-                        # MTF
+                        # MTF + Regime for confidence
                         try:
                             d1 = compute_indicators(load_prices(tkr, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
                             dH = compute_indicators(load_prices(tkr, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
@@ -1117,7 +1184,6 @@ with tab_port:
                                 mtf_long = mtf_short = None
                         except Exception:
                             mtf_long = mtf_short = None
-                        # Regime quick
                         long_good=short_good=None
                         try:
                             ind_rg = compute_indicators(load_prices(tkr, "2y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=False)
@@ -1143,8 +1209,10 @@ with tab_port:
                         except Exception:
                             pass
                         news_items = fetch_news_bundle(tkr)[:5]
-                        confL = confidence_score_side(score, comp_max_local, mtf_long, news_items, long_good, "long")
-                        confS = confidence_score_side(score, comp_max_local, mtf_short, news_items, short_good, "short")
+                        confL = confidence_score_side(score, (w_ma+w_rsi+w_macd+(w_bb if include_bb else 0.0)) if use_weighted else 3.0,
+                                                      mtf_long, news_items, long_good, "long")
+                        confS = confidence_score_side(score, (w_ma+w_rsi+w_macd+(w_bb if include_bb else 0.0)) if use_weighted else 3.0,
+                                                      mtf_short, news_items, short_good, "short")
 
             # Guardrails override
             if pnl_pct > profit_target:     suggestion="🔴 SELL"
@@ -1171,62 +1239,70 @@ with tab_port:
             ax.set_ylabel(""); ax.set_title("Portfolio Allocation")
             st.pyplot(fig)
 
-            # Risk: correlation heatmap + VaR
-            if ret_frame:
-                R = pd.concat(ret_frame, axis=1).dropna()
-                if not R.empty and R.shape[1] >= 2:
-                    corr = R.corr()
-                    st.subheader("🔗 Correlation (daily returns)")
-                    fig, ax = plt.subplots(figsize=(5,4))
-                    cax = ax.imshow(corr, interpolation="nearest")
-                    ax.set_xticks(range(len(corr.columns))); ax.set_xticklabels(corr.columns, rotation=45, ha="right")
-                    ax.set_yticks(range(len(corr.columns))); ax.set_yticklabels(corr.columns)
-                    fig.colorbar(cax)
-                    ax.set_title("Correlation Heatmap")
-                    plt.tight_layout()
-                    st.pyplot(fig)
-
-                # Simple 95% Historical VaR for this static portfolio (weights by market value)
+            # Risk: correlation & VaR
+            if len(df_port) >= 2:
                 try:
+                    R = pd.concat([load_prices(t, "1y", "1d")["Close"].pct_change().rename(t) for t in df_port.index], axis=1).dropna()
+                    if not R.empty and R.shape[1] >= 2:
+                        corr = R.corr()
+                        st.subheader("🔗 Correlation (daily returns)")
+                        fig, ax = plt.subplots(figsize=(5,4))
+                        cax = ax.imshow(corr, interpolation="nearest")
+                        ax.set_xticks(range(len(corr.columns))); ax.set_xticklabels(corr.columns, rotation=45, ha="right")
+                        ax.set_yticks(range(len(corr.columns))); ax.set_yticklabels(corr.columns)
+                        fig.colorbar(cax)
+                        ax.set_title("Correlation Heatmap"); plt.tight_layout()
+                        st.pyplot(fig)
+                    # 95% Hist. VaR
                     values = df_port["Market Value"]
                     w = values / values.sum()
-                    common_idx = R.index
-                    port_ret = (R.loc[common_idx] @ w.reindex(R.columns).fillna(0)).dropna()
+                    port_ret = (R @ w.reindex(R.columns).fillna(0)).dropna()
                     if len(port_ret) > 250:
-                        var95 = np.percentile(port_ret, 5)  # negative tail
+                        var95 = np.percentile(port_ret, 5)
                         st.metric("📉 95% Hist. VaR (1-day)", f"{var95*100:.2f}%")
                 except Exception:
                     pass
 
-            # Download datasets
+            # Rebalance to Risk Parity target (optional)
+            st.subheader("🔁 Rebalance to Risk Parity (suggested trades)")
+            if st.button("Compute Rebalance", key="btn_rebal"):
+                try:
+                    # approximate RP weights from 1y daily vol (1/vol normalized)
+                    vols=[]
+                    for t in df_port.index:
+                        r = load_prices(t, "1y", "1d")["Close"].pct_change().dropna()
+                        vols.append(r.std(ddof=0) if len(r)>50 else np.nan)
+                    vol_s = pd.Series(vols, index=df_port.index).replace(0, np.nan)
+                    inv = 1.0 / vol_s
+                    w_tgt = (inv / inv.sum()).fillna(0.0)
+                    orders = rebalance_orders(df_port[["Shares","Price","Market Value"]], w_tgt)
+                    st.dataframe(orders, use_container_width=True)
+                    st.download_button("⬇️ Download Orders (CSV)", orders.to_csv(), file_name="rebalance_orders.csv", key="dl_rebal_csv")
+                except Exception as e:
+                    st.error(f"Rebalance error: {e}")
+
+            # Downloads
             st.download_button("⬇️ Download Simulated Portfolio (CSV)", df_port.to_csv(), file_name="simulated_portfolio.csv", key="dl_port_csv")
             st.download_button("⬇️ Download Simulated Portfolio (JSON)", df_port.to_json(orient="table"), file_name="simulated_portfolio.json", key="dl_port_json")
 
-            # Advice report with rationale (portfolio)
+            # Advice report
             context = [
-                "Advisor includes guardrails (profit target / loss limit).",
-                "Composite integrates MA/RSI/MACD (+BB optional) with weights & thresholds.",
-                "Dual confidence is side-aware (Long/Short) using MTF, news, and regime."
+                "Advisor uses guardrails (profit target / loss limit).",
+                "Composite integrates MA/RSI/MACD (+BB) with weights & threshold.",
+                "Confidence is side-aware (MTF, news, regime). Use with judgment."
             ]
             mime, content, fname = build_report("Portfolio", report_rows, context)
             st.download_button("⬇️ Download Advice Report (PDF/HTML)", content, file_name=fname, mime=mime, key="dl_report")
         else:
             st.error("No valid holdings provided.")
 
-    # Hedge Sizing vs SPY (beta neutralization)
+    # Hedge Sizing vs SPY
     st.subheader("🛡️ Hedge Sizing (SPY beta neutral)")
     hedge_val = st.number_input("Portfolio market value ($)", 100000.0, step=1000.0, key="hedge_mv")
     target_beta = st.slider("Target net beta", -0.5, 1.0, 0.0, 0.1, key="hedge_beta_target")
+    tickers_for_beta = st.text_input("Optional: tickers (for beta est.)", "AAPL, MSFT, TSLA", key="hedge_beta_list")
     if st.button("Compute Hedge", key="btn_hedge"):
         try:
-            b = factor_lens("SPY", "1y")  # placeholder to ensure loader warm
-            # Estimate portfolio beta to SPY from current holdings weights (rough = cap-weighted betas)
-            # If no df_port in memory, we ask to run advisor first
-            if "simulated_portfolio.json" in [w.key for w in st.session_state.widget_ids] if hasattr(st.session_state, "widget_ids") else False:
-                pass
-            # Simplify: assume portfolio beta ~ 1.0 unless user pastes tickers below:
-            # Advanced: ask user to paste tickers for beta regression:
-            tickers_for_beta = st.text_input("Optional: tickers (for beta est.)", "AAPL, MSFT, TSLA", key="hedge_beta_list")
             betas=[]; weights=[]
             for t in [x.strip().upper() for x in tickers_for_beta.split(",") if x.strip()]:
                 bt = factor_lens(t, "1y")
@@ -1234,8 +1310,6 @@ with tab_port:
                 betas.append(float(bt["SPY"])); weights.append(1.0)
             port_beta = (np.average(betas, weights=weights) if betas else 1.0)
             spy_price = _to_float(load_prices("SPY", "5d", "1d")["Close"].iloc[-1])
-            # Shares of SPY to trade to reach target_beta
-            # Δbeta needed * portfolio_value / (SPY price * beta_per_$ of SPY ~ 1)
             delta_beta = target_beta - port_beta
             notional = delta_beta * hedge_val
             shares = notional / spy_price
@@ -1248,8 +1322,7 @@ with tab_port:
     st.subheader("🎲 Monte Carlo (Bootstrap) of Strategy Returns")
     mc_symbol = st.text_input("Symbol (MC)", value="AAPL", key="inp_mc_symbol").upper()
     n_paths = st.slider("Paths", 200, 3000, 800, 100, key="mc_paths")
-    run_mc = st.button("Run Monte Carlo", key="btn_mc")
-    if run_mc:
+    if st.button("Run Monte Carlo", key="btn_mc"):
         try:
             px = load_prices(mc_symbol, "2y", "1d")
             ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
@@ -1323,7 +1396,7 @@ Paste a universe; we rank by Composite and (optionally) **ML probability of an u
 ---
 
 ### ETF / Factor Lens
-We regress a symbol on ETF proxies (**SPY/IWM/IWD/MTUM**) to show rough factor exposures.
+We regress a symbol on ETF proxies (**SPY/IWM/IWD/MTUM/QUAL/USMV**) to show rough factor exposures.
 
 ---
 
@@ -1333,36 +1406,37 @@ Upload or paste **ticker,shares,cost_basis**. We compute **P/L**, **Composite su
 - If P/L% < -loss limit → consider **buy/add** or reassess.
 Export **CSV/JSON** datasets and a **PDF/HTML report** with reasoning.
 
-Additional portfolio tools:
-- **Risk Parity weights** (equal risk contribution).
+Extras:
+- **Risk Parity weights** (equal risk contribution) and **rebalance orders**.
 - **Beta hedge sizing** vs SPY to reach a **target net beta**.
 - **Correlation heatmap** and **95% historical VaR** (1-day).
+- **ATR-based position sizing** helper.
 
 ---
 
 ### Earnings
-We show **upcoming** earnings if available, else **last reported**. Dates are UTC-normalized.
+We show **upcoming** earnings if available (UTC), else **last reported**. If you see stale dates, providers may not have posted new schedules yet.
 
 ---
 
 ### Modes (Beginner vs Pro)
-- **Beginner:** more explanations expanded by default; sensible defaults.
-- **Pro:** same engine; more freedom to tune.
+- **Beginner:** explanations expanded by default; sensible defaults.
+- **Pro:** same engine; broader tuning and diagnostics.
 
 ---
 
 ### Data health
-The freshness banner shows how current your data is. If it's **stale**, consider a longer window or daily bars.
+The freshness banner shows how current your data is. If it's **stale**, consider daily bars or a longer history.
 
 ---
 
 ### Tips
-- Lengthen history or reduce indicator windows if you see "not enough rows".
-- Confidence toward a side means **alignment** across MTF, news and regime—not certainty.
-- WFO/optimization ideas: prefer stable params, not peak backtest curves.
+- If you see "not enough rows", increase history or reduce windows.
+- Confidence = alignment of ingredients, not certainty.
+- Avoid over-fitting: prefer stable parameters, validate OOS.
 
 ---
 
 ### Disclaimers
-This is **research software**, not investment advice. Markets are noisy; use multiple tools and judgment.
+This is **research software**, not investment advice.
 """)
