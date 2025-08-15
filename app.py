@@ -603,9 +603,6 @@ def build_playbook(watch_tickers: List[str]) -> Tuple[str, bytes, str]:
 
 # ICS calendar export
 def build_ics(events: List[Tuple[str, pd.Timestamp, str]]) -> bytes:
-    """
-    events: list of (title, dt_utc, description)
-    """
     lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//QuantaraX//EN"]
     for title, dt, desc in events:
         if not isinstance(dt, pd.Timestamp): continue
@@ -647,7 +644,7 @@ def pattern_checks(df: pd.DataFrame) -> List[str]:
         elif r < 30: out.append(f"🧪 RSI Oversold ({r:.1f})")
     return out
 
-# Macro dashboard
+# Macro dashboard  ✅ FIXED
 def macro_dashboard():
     tickers = ["SPY","TLT","HYG","DXY","GLD","USO"]
     data = {}
@@ -657,8 +654,21 @@ def macro_dashboard():
         data[t] = px["Close"]
     if len(data) < 3:
         st.info("Macro dashboard needs more data availability."); return
-    df = pd.DataFrame(data).dropna()
-    ytd = (df / df[df.index[df.index.year == df.index[-1].year][0]] - 1).iloc[-1] if (df.index.year==df.index[-1].year).any() else (df.pct_change(252).iloc[-1])
+    df = pd.DataFrame(data).dropna().sort_index()
+
+    # Safe YTD calc: use .loc on the first timestamp of the current year
+    try:
+        last_year = df.index[-1].year
+        mask = (df.index.year == last_year)
+        if mask.any():
+            year_start_ts = df.index[mask][0]
+            base = df.loc[year_start_ts]          # row (Series) at year start
+            ytd = (df.div(base) - 1.0).iloc[-1]   # broadcast division by columns
+        else:
+            ytd = df.pct_change(252).iloc[-1]
+    except Exception:
+        ytd = df.pct_change(252).iloc[-1]
+
     m1  = df.pct_change(21).iloc[-1]
     score = 0
     score += 1 if ytd.get("SPY",0)>0 else -1
@@ -853,7 +863,7 @@ with tab_engine:
         st.pyplot(fig)
 
     st.markdown("---")
-    # MTF + Factor lens + ATR sizing + Options (same as previous version, kept compact)
+    # MTF + Factor lens + ATR sizing + Options
     with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
         mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="inp_mtf_symbol")
         if st.button("🔍 Check MTF", key="btn_mtf"):
@@ -1211,7 +1221,9 @@ with tab_port:
             c1.metric("Total Market Value", f"${df_port['Market Value'].sum():,.2f}")
             c2.metric("Total Invested",     f"${df_port['Invested'].sum():,.2f}")
             c3.metric("Total P/L",          f"${df_port['Market Value'].sum()-df_port['Invested'].sum():,.2f}")
-            fig, ax=plt.subplots(figsize=(5,5)); df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax); ax.set_ylabel(""); ax.setTitle = "Portfolio Allocation"; st.pyplot(fig)
+            fig, ax=plt.subplots(figsize=(5,5))
+            df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax); ax.set_ylabel(""); ax.set_title("Portfolio Allocation")
+            st.pyplot(fig)
             # Risk: correlation & VaR
             if len(df_port) >= 2:
                 try:
