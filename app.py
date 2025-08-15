@@ -896,21 +896,39 @@ with tab_engine:
 
     st.markdown("---")
     # MTF + Factor lens + ATR sizing + Options (same as previous version, kept compact)
-    with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
-        mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="inp_mtf_symbol")
-        if st.button("🔍 Check MTF", key="btn_mtf"):
-            try:
-                d1 = compute_indicators(load_prices(mtf_symbol, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-                dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-                if d1.empty or dH.empty: st.warning("Insufficient data for MTF."); st.stop()
-                c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
-                cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
-                daily  = float(c1["Composite"].iloc[-1]); hourly = float(cH["Composite"].iloc[-1])
-                st.write(f"**Daily composite:** {daily:.2f}")
-                st.write(f"**Hourly composite:** {hourly:.2f}")
-                st.success("✅ Signals agree") if np.sign(daily) == np.sign(hourly) else st.warning("⚠️ Signals disagree")
-            except Exception as e:
-                st.error(f"MTF error: {e}")
+  with st.expander("⏱️ Multi-Timeframe Confirmation", expanded=False):
+    mtf_symbol = st.text_input("Symbol (MTF)", value=ticker or "AAPL", key="inp_mtf_symbol")
+
+    if st.button("🔍 Check MTF", key="btn_mtf"):
+        try:
+            d1 = compute_indicators(load_prices(mtf_symbol, "1y",  "1d"),
+                                    ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+            dH = compute_indicators(load_prices(mtf_symbol, "30d", "1h"),
+                                    ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+
+            if d1.empty or dH.empty:
+                st.warning("Insufficient data for MTF."); st.stop()
+
+            c1 = build_composite(d1, ma_window, rsi_period,
+                                 use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                                 include_bb=True, threshold=1.0)
+            cH = build_composite(dH, ma_window, rsi_period,
+                                 use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5,
+                                 include_bb=True, threshold=1.0)
+
+            daily  = float(c1["Composite"].iloc[-1])
+            hourly = float(cH["Composite"].iloc[-1])
+
+            st.write(f"**Daily composite:** {daily:.2f}")
+            st.write(f"**Hourly composite:** {hourly:.2f}")
+
+            if np.sign(daily) == np.sign(hourly):
+                st.success("✅ Signals agree")
+            else:
+                st.warning("⚠️ Signals disagree")
+
+        except Exception as e:
+            st.error(f"MTF error: {e}")
 
     with st.expander("🧭 ETF / Factor Lens", expanded=False):
         fac_symbol = st.text_input("Symbol (Factor Lens)", value=ticker or "AAPL", key="inp_factor_symbol")
