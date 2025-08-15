@@ -1211,7 +1211,7 @@ with tab_port:
             c1.metric("Total Market Value", f"${df_port['Market Value'].sum():,.2f}")
             c2.metric("Total Invested",     f"${df_port['Invested'].sum():,.2f}")
             c3.metric("Total P/L",          f"${df_port['Market Value'].sum()-df_port['Invested'].sum():,.2f}")
-            fig, ax=plt.subplots(figsize=(5,5)); df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax); ax.set_ylabel(""); ax.set_title("Portfolio Allocation"); st.pyplot(fig)
+            fig, ax=plt.subplots(figsize=(5,5)); df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax); ax.set_ylabel(""); ax.setTitle = "Portfolio Allocation"; st.pyplot(fig)
             # Risk: correlation & VaR
             if len(df_port) >= 2:
                 try:
@@ -1354,7 +1354,7 @@ Two separate confidence scores:
 ### Backtesting & risk
 We simulate bar-by-bar:
 - **Shorts** (optional), **trading costs**, **ATR stop/target**, and **volatility targeting**.
-- Key metrics: **CAGR, Sharpe, MaxDD, Win Rate, Trades, Time-in-Market**.
+- Key metrics: **CAGR, Sharpe, Max Drawdown, Win Rate, Trades, Time-in-Market**.
 
 ---
 
