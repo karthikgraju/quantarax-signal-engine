@@ -1224,63 +1224,109 @@ with tab_port:
             fig, ax=plt.subplots(figsize=(5,5))
             df_port["Market Value"].plot.pie(autopct="%.1f%%", ax=ax); ax.set_ylabel(""); ax.set_title("Portfolio Allocation")
             st.pyplot(fig)
-            # Risk: correlation & VaR
-            if len(df_port) >= 2:
-                try:
-                    R = pd.concat([load_prices(t, "1y", "1d")["Close"].pct_change().rename(t) for t in df_port.index], axis=1).dropna()
-                    if not R.empty and R.shape[1] >= 2:
-                        corr = R.corr(); st.subheader("🔗 Correlation (daily returns)")
-                        fig, ax = plt.subplots(figsize=(5,4)); cax = ax.imshow(corr, interpolation="nearest")
-                        ax.set_xticks(range(len(corr.columns))); ax.set_xticklabels(corr.columns, rotation=45, ha="right")
-                        ax.set_yticks(range(len(corr.columns))); ax.set_yticklabels(corr.columns)
-                        fig.colorbar(cax); ax.set_title("Correlation Heatmap"); plt.tight_layout(); st.pyplot(fig)
-                    values = df_port["Market Value"]; w = values / values.sum()
-                    port_ret = (R @ w.reindex(R.columns).fillna(0)).dropna()
-                    if len(port_ret) > 250:
-                        var95 = np.percentile(port_ret, 5); st.metric("📉 95% Hist. VaR (1-day)", f"{var95*100:.2f}%")
-                except Exception: pass
-            # Scenario shock
-            st.subheader("⚠️ Scenario Shock")
-            shock = st.slider("Assumed market shock (SPY)", -0.10, 0.10, -0.05, 0.01, key="scn_shock")
-            if st.button("Run Shock", key="btn_shock"):
-                try:
-                    betas=[]
-                    for t in df_port.index:
-                        b = factor_lens(t, "1y")
-                        if b is not None and "SPY" in b.index: betas.append((t, float(b["SPY"])))
-                        else: betas.append((t, 1.0))
-                    betas = pd.Series(dict(betas))
-                    impact_pct = betas * shock
-                    dollar_impact = impact_pct * df_port["Market Value"]
-                    st.dataframe(pd.DataFrame({"Beta":betas, "Shock Impact %":impact_pct*100, "Shock $":dollar_impact}).round(3))
-                    st.metric("Estimated Portfolio P/L from shock", f"${dollar_impact.sum():,.0f}")
-                except Exception as e:
-                    st.error(f"Shock error: {e}")
-            # Rebalance
-            st.subheader("🔁 Rebalance to Risk Parity (suggested trades)")
-            if st.button("Compute Rebalance", key="btn_rebal"):
-                try:
-                    vols=[]
-                    for t in df_port.index:
-                        r = load_prices(t, "1y", "1d")["Close"].pct_change().dropna()
-                        vols.append(r.std(ddof=0) if len(r)>50 else np.nan)
-                    vol_s = pd.Series(vols, index=df_port.index).replace(0, np.nan)
-                    inv = 1.0 / vol_s; w_tgt = (inv / inv.sum()).fillna(0.0)
-                    orders = rebalance_orders(df_port[["Shares","Price","Market Value"]], w_tgt)
-                    st.dataframe(orders, use_container_width=True)
-                    st.download_button("⬇️ Download Orders (CSV)", orders.to_csv(), file_name="rebalance_orders.csv", key="dl_rebal_csv")
-                except Exception as e:
-                    st.error(f"Rebalance error: {e}")
-            # Downloads
-            st.download_button("⬇️ Download Simulated Portfolio (CSV)", df_port.to_csv(), file_name="simulated_portfolio.csv", key="dl_port_csv")
-            st.download_button("⬇️ Download Simulated Portfolio (JSON)", df_port.to_json(orient="table"), file_name="simulated_portfolio.json", key="dl_port_json")
-            context = ["Advisor uses guardrails (profit target / loss limit).",
-                       "Composite integrates MA/RSI/MACD (+BB) with weights & threshold.",
-                       "Confidence is side-aware (MTF, news, regime). Use with judgment."]
-            mime, content, fname = build_report("Portfolio", report_rows, context)
-            st.download_button("⬇️ Download Advice Report (PDF/HTML)", content, file_name=fname, mime=mime, key="dl_report")
+           # Risk: correlation & VaR  ✅ robust
+st.subheader("🔗 Correlation (daily returns) & 📉 VaR")
+
+try:
+    # Build a clean daily-returns matrix with only valid tickers
+    series, keep = [], []
+    for t in df_port.index:
+        px = load_prices(t, "1y", "1d")
+        if not px.empty and "Close" in px:
+            s = px["Close"].pct_change().dropna().rename(t)
+            if len(s) >= 60:
+                series.append(s); keep.append(t)
+
+    if len(series) >= 2:
+        R = pd.concat(series, axis=1).dropna(how="any")
+        if R.shape[1] >= 2 and not R.empty:
+            corr = R.corr()
+
+            # Heatmap
+            fig, ax = plt.subplots(figsize=(5,4))
+            cax = ax.imshow(corr.values)
+            ax.set_xticks(range(len(corr.columns))); ax.set_xticklabels(corr.columns, rotation=45, ha="right")
+            ax.set_yticks(range(len(corr.index)));  ax.set_yticklabels(corr.index)
+            fig.colorbar(cax); ax.set_title("Correlation Heatmap"); plt.tight_layout()
+            st.pyplot(fig)
+
+            # VaR (needs enough history)
+            values = pd.to_numeric(df_port.loc[keep, "Market Value"], errors="coerce").fillna(0.0)
+            weights = (values / values.sum()).reindex(R.columns).fillna(0.0)
+            port_ret = (R @ weights).dropna()
+
+            if len(port_ret) >= 250:
+                var95 = np.percentile(port_ret, 5)  # historical 1-day VaR
+                st.metric("📉 95% Hist. VaR (1-day)", f"{var95*100:.2f}%")
+            else:
+                st.caption("VaR needs ≥250 daily returns; extend history to 1y+ if you want this metric.")
         else:
-            st.error("No valid holdings provided.")
+            st.info("Not enough overlapping history across tickers to compute correlation/VaR.")
+    else:
+        st.info("Need at least 2 tickers with 60+ daily bars for correlation/VaR.")
+except Exception as e:
+    st.warning(f"Risk section skipped: {e}")
+
+         # Scenario shock  ✅ robust, numerics aligned
+st.subheader("⚠️ Scenario Shock")
+shock = st.slider("Assumed market shock (SPY)", -0.10, 0.10, -0.05, 0.01, key="scn_shock")
+
+if st.button("Run Shock", key="btn_shock"):
+    try:
+        betas = {}
+        for t in df_port.index:
+            b = factor_lens(t, "1y")
+            beta_spy = float(b["SPY"]) if (b is not None and "SPY" in b.index) else np.nan
+            betas[t] = beta_spy
+        beta_s = pd.Series(betas).fillna(1.0)  # fallback β=1 if estimate unavailable
+
+        mv = pd.to_numeric(df_port["Market Value"], errors="coerce").fillna(0.0)
+        impact_pct = beta_s.reindex(df_port.index).fillna(1.0) * shock
+        dollar_impact = impact_pct * mv
+
+        out = pd.DataFrame({
+            "Beta(≈SPY)": beta_s.reindex(df_port.index).round(3),
+            "Shock Impact %": (impact_pct*100).round(2),
+            "Shock $": dollar_impact.round(2),
+        })
+        st.dataframe(out, use_container_width=True)
+        st.metric("Estimated Portfolio P/L from shock", f"${dollar_impact.sum():,.0f}")
+    except Exception as e:
+        st.error(f"Shock error: {e}")
+
+# Rebalance  ✅ robust, handles NaNs/strings/insufficient data
+st.subheader("🔁 Rebalance to Risk Parity (suggested trades)")
+if st.button("Compute Rebalance", key="btn_rebal"):
+    try:
+        vols = {}
+        for t in df_port.index:
+            px = load_prices(t, "1y", "1d")
+            s = px["Close"].pct_change().dropna() if not px.empty else pd.Series(dtype=float)
+            vols[t] = s.std(ddof=0) if len(s) >= 50 else np.nan
+
+        vol_s = pd.Series(vols).replace(0, np.nan)
+        if vol_s.notna().sum() < 2:
+            st.info("Need at least 2 tickers with 50+ daily bars to compute risk parity.")
+        else:
+            inv = 1.0 / vol_s
+            w_tgt = (inv / inv.sum()).fillna(0.0)
+
+            # Ensure numeric current positions
+            current = df_port[["Shares","Price","Market Value"]].copy()
+            for c in current.columns:
+                current[c] = pd.to_numeric(current[c], errors="coerce").fillna(0.0)
+
+            orders = rebalance_orders(current, w_tgt)
+            st.dataframe(orders, use_container_width=True)
+            st.download_button(
+                "⬇️ Download Orders (CSV)",
+                orders.to_csv(),
+                file_name="rebalance_orders.csv",
+                key="dl_rebal_csv"
+            )
+    except Exception as e:
+        st.error(f"Rebalance error: {e}")
+
 
     # Hedge Sizing vs SPY
     st.subheader("🛡️ Hedge Sizing (SPY beta neutral)")
