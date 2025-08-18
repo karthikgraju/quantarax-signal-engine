@@ -42,7 +42,7 @@ except Exception:
 
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v46", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v4.6", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
