@@ -1,4 +1,4 @@
-# app.py — QuantaraX Pro v46 (investor-ready, single file)
+# app.py — QuantaraX Pro v46 (investor-ready, single file) 
 # ---------------------------------------------------------------------------------
 # pip install:
 #   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn reportlab
@@ -486,6 +486,16 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
                 if p == 1 and (c <= entry - sl_atr_mult*a or c >= entry + tp_atr_mult*a): flat[i] = 1; entry = np.nan
                 if p == -1 and (c >= entry + sl_atr_mult*a or c <= entry - tp_atr_mult*a): flat[i] = 1; entry = np.nan
         if flat.any(): d.loc[flat==1, "Position"] = 0
+
+        # ✅ Recompute P&L now that Position has been flattened by stops/targets
+        if allow_short:
+            base_ret = np.where(d["Position"] >= 0, d["Return"], -d["Return"])
+        else:
+            base_ret = d["Position"] * d["Return"]
+        if vol_target and vol_target > 0:
+            base_ret = base_ret * scale.reindex(d.index).fillna(0.0)
+        d["StratRet"] = pd.Series(base_ret, index=d.index).fillna(0.0) + tcost
+
     ret_bh = d["Return"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     ret_st = d["StratRet"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     d["CumBH"]    = (1 + ret_bh).cumprod()
@@ -527,7 +537,7 @@ def monthly_heatmap(returns: pd.Series) -> pd.DataFrame:
     piv = piv.reindex(columns=months)
     return (piv*100).round(2)
 
-def kelly_from_backtest(d: pd.DataFrame]) -> Optional[float]:
+def kelly_from_backtest(d: pd.DataFrame) -> Optional[float]:
     """Approximate Kelly using win rate & payoff ratio."""
     if d is None or d.empty or "StratRet" not in d: return None
     r = d["StratRet"].dropna()
