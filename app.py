@@ -1,16 +1,21 @@
-# app.py — QuantaraX Pro v46 (investor-ready, single file) 
+# app.py — QuantaraX Pro v47 (investor-ready, with Alerts & Saved Scans)
 # ---------------------------------------------------------------------------------
 # pip install:
-#   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn reportlab
+#   streamlit yfinance pandas numpy matplotlib feedparser vaderSentiment scikit-learn reportlab requests
 # (reportlab optional; we fall back to HTML export if missing)
 
 import io
 import json
 import math
 import time
+import ssl
+import smtplib
+import hashlib
 import warnings
+from email.message import EmailMessage
 from typing import List, Tuple, Optional, Dict
 
+import requests
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -42,18 +47,21 @@ except Exception:
 
 
 # ───────────────────────────── Page Setup ─────────────────────────────
-st.set_page_config(page_title="QuantaraX Pro v4.6", layout="wide")
+st.set_page_config(page_title="QuantaraX Pro v47", layout="wide")
 analyzer = SentimentIntensityAnalyzer()
 rec_map = {1: "🟢 BUY", 0: "🟡 HOLD", -1: "🔴 SELL"}
 
-# Tabs (added Strategy Lab)
-TAB_TITLES = ["🚀 Engine", "🧪 Strategy Lab", "🧠 ML Lab", "📡 Scanner", "📉 Regimes", "💼 Portfolio", "❓ Help"]
-(tab_engine, tab_strat, tab_ml, tab_scan, tab_regime, tab_port, tab_help) = st.tabs(TAB_TITLES)
+# Tabs (added Alerts)
+TAB_TITLES = ["🚀 Engine", "🧪 Strategy Lab", "🧠 ML Lab", "📡 Scanner", "🔔 Alerts", "📉 Regimes", "💼 Portfolio", "❓ Help"]
+(tab_engine, tab_strat, tab_ml, tab_scan, tab_alerts, tab_regime, tab_port, tab_help) = st.tabs(TAB_TITLES)
 
 
 # ───────────────────────────── Sidebar ─────────────────────────────
 st.sidebar.header("Mode & Global Controls")
 user_mode = st.sidebar.radio("Experience mode", ["Beginner", "Pro"], index=0, key="mode_select")
+
+# (Optional) Plan selector for demo/pricing discussion (no enforcement, just UI)
+plan = st.sidebar.selectbox("Plan (for demo gating only)", ["Free", "Starter", "Pro", "Team/Enterprise"], index=2, key="plan_select")
 
 PRESETS = {
     "Balanced (default)": dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_signal=9,
@@ -68,6 +76,12 @@ DEFAULTS = dict(ma_window=10, rsi_period=14, macd_fast=12, macd_slow=26, macd_si
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Hold app-level state for saved scans & alerts
+if "saved_scans" not in st.session_state:
+    st.session_state["saved_scans"] = []  # list of dicts
+if "alert_last_sent" not in st.session_state:
+    st.session_state["alert_last_sent"] = {}  # key -> UTC timestamp
 
 # Settings Save/Load
 with st.sidebar.expander("💾 Settings"):
@@ -108,7 +122,7 @@ with st.sidebar.expander("💾 Settings"):
             "macd_signal": st.session_state["macd_signal"],
             "include_bb": st.session_state.get("include_bb", True),
             "w_ma": st.session_state.get("w_ma", 1.0),
-            "w_rsi": st.session_state.get("w_rsi", 1.0),
+            "w_rsi": st.session_state.get("w_rsi",1.0),
             "w_macd": st.session_state.get("w_macd",1.0),
             "w_bb": st.session_state.get("w_bb",0.5),
             "comp_thr": st.session_state.get("comp_thr",1.0),
@@ -486,16 +500,6 @@ def backtest(df: pd.DataFrame, *, allow_short=False, cost_bps=0.0,
                 if p == 1 and (c <= entry - sl_atr_mult*a or c >= entry + tp_atr_mult*a): flat[i] = 1; entry = np.nan
                 if p == -1 and (c >= entry + sl_atr_mult*a or c <= entry - tp_atr_mult*a): flat[i] = 1; entry = np.nan
         if flat.any(): d.loc[flat==1, "Position"] = 0
-
-        # ✅ Recompute P&L now that Position has been flattened by stops/targets
-        if allow_short:
-            base_ret = np.where(d["Position"] >= 0, d["Return"], -d["Return"])
-        else:
-            base_ret = d["Position"] * d["Return"]
-        if vol_target and vol_target > 0:
-            base_ret = base_ret * scale.reindex(d.index).fillna(0.0)
-        d["StratRet"] = pd.Series(base_ret, index=d.index).fillna(0.0) + tcost
-
     ret_bh = d["Return"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     ret_st = d["StratRet"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     d["CumBH"]    = (1 + ret_bh).cumprod()
@@ -1122,83 +1126,15 @@ with tab_strat:
         fig.colorbar(im, ax=ax); st.pyplot(fig)
 
 
-# ───────────────────────────── ML LAB ─────────────────────────────
-with tab_ml:
-    st.title("🧠 ML Lab — Probabilistic Signals")
-    if not SKLEARN_OK: st.warning("scikit-learn not installed. Run: pip install scikit-learn")
-    symbol = st.text_input("Symbol (ML)", value="AAPL", key="inp_ml_symbol").upper()
-    horizon = st.slider("Prediction horizon (bars)", 1, 5, 1, key="ml_horizon")
-    train_frac = st.slider("Train fraction", 0.5, 0.95, 0.8, key="ml_train_frac")
-    proba_enter = st.slider("Enter if P(long) ≥", 0.50, 0.80, 0.55, 0.01, key="ml_p_enter")
-    proba_exit  = st.slider("Enter short if P(long) ≤", 0.20, 0.50, 0.45, 0.01, key="ml_p_exit")
-    run_ml = st.button("🤖 Train & Backtest", key="btn_ml_run")
-
-    def _ml_features(d: pd.DataFrame) -> pd.DataFrame:
-        out = pd.DataFrame(index=d.index)
-        out["ret1"] = d["Close"].pct_change()
-        out["ret5"] = d["Close"].pct_change(5)
-        out["vol20"] = d["Close"].pct_change().rolling(20).std()
-        out["rsi"] = d.get(f"RSI{rsi_period}", np.nan)
-        out["macd"] = d.get("MACD", np.nan)
-        out["sto_k"] = d.get("STO_K", np.nan)
-        out["adx"] = d.get("ADX", np.nan)
-        if {"BB_U","BB_L"}.issubset(d.columns):
-            rng = (d["BB_U"] - d["BB_L"]).replace(0, np.nan)
-            out["bb_pos"] = (d["Close"] - d["BB_L"]) / rng
-        else:
-            out["bb_pos"] = np.nan
-        return out.dropna()
-
-    if run_ml:
-        try:
-            if not SKLEARN_OK: st.stop()
-            px = load_prices(symbol, period_sel, interval_sel)
-            ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
-            if ind.empty: st.error("Not enough data for indicators."); st.stop()
-            X = _ml_features(ind)
-            y = (ind["Close"].pct_change(horizon).shift(-horizon) > 0).reindex(X.index).astype(int)
-            data = pd.concat([X, y.rename("y")], axis=1).dropna()
-            if len(data) < 200: st.warning("Not enough rows for ML. Try longer history or daily interval."); st.stop()
-            split = int(len(data) * float(train_frac))
-            train, test = data.iloc[:split], data.iloc[split:]
-            clf = RandomForestClassifier(n_estimators=400, max_depth=6, random_state=42, n_jobs=-1)
-            clf.fit(train.drop(columns=["y"]), train["y"])
-            proba = clf.predict_proba(test.drop(columns=["y"]))[:,1]
-            y_true= test["y"].values
-            acc = accuracy_score(y_true, (proba>0.5).astype(int))
-            try: auc = roc_auc_score(y_true, proba)
-            except Exception: auc = np.nan
-            st.subheader("Out-of-sample performance")
-            c1,c2 = st.columns(2)
-            c1.metric("Accuracy (0.5)", f"{acc*100:.1f}%"); c2.metric("ROC-AUC", f"{(0 if np.isnan(auc) else auc):.3f}")
-            try:
-                pim = permutation_importance(clf, test.drop(columns=["y"]), y_true, n_repeats=5, random_state=42)
-                imp = pd.Series(pim.importances_mean, index=test.drop(columns=["y"]).columns).sort_values(ascending=False)
-                st.bar_chart(imp)
-            except Exception: st.info("Permutation importance unavailable.")
-            if allow_short: sig = np.where(proba >= proba_enter, 1, np.where(proba <= proba_exit, -1, 0))
-            else:           sig = np.where(proba >= proba_enter, 1, 0)
-            ml_df = ind.loc[test.index].copy(); ml_df["Trade"] = pd.Series(sig, index=ml_df.index, dtype=int)
-            bt, md, sh, wr, trd, tim, cagr = backtest(ml_df, allow_short=allow_short, cost_bps=cost_bps,
-                                                       sl_atr_mult=sl_atr_mult, tp_atr_mult=tp_atr_mult,
-                                                       vol_target=vol_target, interval=interval_sel)
-            st.markdown(f"**ML Strategy OOS:** Return={(bt['CumStrat'].iloc[-1]-1)*100:.2f}% | Sharpe={sh:.2f} | MaxDD={md:.2f}% | Trades={trd}")
-            fig, ax = plt.subplots(figsize=(9,3))
-            ax.plot(bt.index, bt["CumBH"], ":", label="BH"); ax.plot(bt.index, bt["CumStrat"], label="ML Strat"); ax.legend(); ax.set_title("ML OOS Equity"); st.pyplot(fig)
-            latest_p = clf.predict_proba(data.drop(columns=["y"]).tail(1))[:,1][0]
-            st.info(f"Latest P(long) = {latest_p:.3f}")
-        except Exception as e:
-            st.error(f"ML error: {e}")
-
-
-# ───────────────────────────── SCANNER ─────────────────────────────
+# ───────────────────────────── SCANNER (with Saved Scans) ─────────────────────────────
 with tab_scan:
     st.title("📡 Universe Scanner — Composite + (optional) ML")
     universe = st.text_area("Tickers (comma-separated)","AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, NFLX, SPY, QQQ", key="ta_scan_universe").upper()
     use_ml_scan = st.toggle("Include ML probability (needs scikit-learn)", value=False, key="tg_ml_scan")
     run_scan = st.button("🔎 Scan", key="btn_scan")
-    if run_scan:
-        rows=[]; tickers = [t.strip() for t in universe.split(",") if t.strip()]
+
+    def _scan_once(tickers: List[str], include_ml: bool) -> pd.DataFrame:
+        rows=[]
         for t in tickers:
             try:
                 px = load_prices(t, period_sel, interval_sel)
@@ -1211,7 +1147,7 @@ with tab_scan:
                 comp = float(sig["Composite"].tail(1).iloc[0]) if "Composite" in sig else 0.0
                 rec = rec_map.get(int(np.sign(comp)), "🟡 HOLD")
                 mlp = np.nan
-                if use_ml_scan and SKLEARN_OK:
+                if include_ml and SKLEARN_OK:
                     X = pd.DataFrame(index=ind.index); X["ret1"] = ind["Close"].pct_change(); X["rsi"] = ind.get(f"RSI{rsi_period}", np.nan); X["macd"] = ind.get("MACD", np.nan); X = X.dropna()
                     y = (ind["Close"].pct_change().shift(-1) > 0).reindex(X.index).astype(int)
                     if len(X) > 200 and y.notna().sum() > 100:
@@ -1222,10 +1158,72 @@ with tab_scan:
                 continue
         if rows:
             df = pd.DataFrame(rows).set_index("Ticker").sort_values(["Signal","Composite"], ascending=[True,False])
+        else:
+            df = pd.DataFrame()
+        return df
+
+    if run_scan:
+        tickers = [t.strip() for t in universe.split(",") if t.strip()]
+        df = _scan_once(tickers, include_ml=use_ml_scan)
+        if not df.empty:
             st.dataframe(df, use_container_width=True)
             st.download_button("⬇️ Download Scan (CSV)", df.to_csv(), file_name="scan.csv", key="dl_scan_csv")
         else:
             st.info("No results. Check tickers or increase history.")
+
+    # Saved Scans
+    st.markdown("---")
+    st.subheader("💾 Saved Scans")
+    with st.expander("Create / Manage Saved Scans", expanded=True):
+        ss_name = st.text_input("Scan name", value="My Growth Techs", key="ss_name")
+        ss_universe = st.text_area("Tickers", value=universe, key="ss_universe")
+        ss_use_ml = st.toggle("Include ML probability", value=use_ml_scan, key="ss_use_ml")
+        if st.button("Save/Update this scan", key="btn_ss_save"):
+            entry = {
+                "name": ss_name.strip(),
+                "tickers": [t.strip().upper() for t in ss_universe.split(",") if t.strip()],
+                "use_ml": bool(ss_use_ml),
+                "created_utc": str(_utcnow_ts())
+            }
+            # Upsert
+            existing = [i for i,s in enumerate(st.session_state["saved_scans"]) if s.get("name","").lower()==entry["name"].lower()]
+            if existing:
+                st.session_state["saved_scans"][existing[0]] = entry
+                st.success(f"Updated saved scan: {entry['name']}")
+            else:
+                st.session_state["saved_scans"].append(entry)
+                st.success(f"Saved scan: {entry['name']}")
+
+        if st.session_state["saved_scans"]:
+            st.write("**Saved scans**")
+            for s in st.session_state["saved_scans"]:
+                st.markdown(f"- **{s['name']}** — {len(s['tickers'])} tickers · ML: {'on' if s['use_ml'] else 'off'}")
+            if st.button("▶️ Run all saved scans now", key="btn_ss_run_all"):
+                for s in st.session_state["saved_scans"]:
+                    st.markdown(f"##### {s['name']}")
+                    df = _scan_once(s["tickers"], include_ml=s["use_ml"])
+                    if not df.empty:
+                        st.dataframe(df, use_container_width=True)
+                        st.download_button(f"⬇️ Download {s['name']} (CSV)", df.to_csv(), file_name=f"{s['name'].replace(' ','_')}.csv", key=f"dl_{s['name']}")
+                    else:
+                        st.info("No results for this scan.")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("⬇️ Export saved_scans.json", key="btn_ss_export"):
+                    st.download_button("Download file", data=json.dumps(st.session_state["saved_scans"], indent=2), file_name="saved_scans.json", key="dl_ss_json")
+            with col_b:
+                up = st.file_uploader("Import saved_scans.json", type=["json"], key="up_ss_json")
+                if up is not None:
+                    try:
+                        obj = json.load(up)
+                        if isinstance(obj, list):
+                            st.session_state["saved_scans"] = obj
+                            st.success("Saved scans imported.")
+                        else:
+                            st.error("Invalid format (expect list).")
+                    except Exception as e:
+                        st.error(f"Import error: {e}")
 
     # Earnings Calendar export from scanner tickers
     with st.expander("📆 Export Earnings Calendar (ICS)", expanded=False):
@@ -1241,6 +1239,176 @@ with tab_scan:
             else:
                 st.info("No upcoming earnings were found.")
 
+
+# ───────────────────────────── ALERTS (Discord / Email) ─────────────────────────────
+with tab_alerts:
+    st.title("🔔 Alerts — Composite Cross & Confidence")
+
+    st.markdown("**Delivery (optional):** Provide either a Discord webhook URL or SMTP email settings. Alerts are sent when you click “Check Alerts Now”.")
+    col_l, col_r = st.columns(2)
+    with col_l:
+        discord_webhook = st.text_input("Discord Webhook URL (optional)", value="", type="password", help="Paste a Discord webhook URL")
+    with col_r:
+        smtp_host = st.text_input("SMTP host", value="", help="e.g., smtp.gmail.com")
+        smtp_port = st.number_input("SMTP port", 1, 65535, 465)
+        smtp_user = st.text_input("SMTP username", value="")
+        smtp_pass = st.text_input("SMTP password", value="", type="password")
+        email_to  = st.text_input("Send email to", value="")
+
+    st.markdown("---")
+    st.subheader("Alert Conditions")
+    alert_universe = st.text_area("Tickers to monitor", value="AAPL, MSFT, NVDA, TSLA, SPY", key="alert_universe").upper()
+    a_thr = st.slider("Composite cross trigger (|Composite| ≥)", 0.5, 3.0, 1.0, 0.1, key="alert_comp_thr")
+    conf_enable = st.toggle("Enable Confidence-based alerts", value=True, key="alert_conf_enable")
+    conf_long_thr = st.slider("Long confidence ≥", 50, 100, 70, 1, key="alert_conf_long")
+    conf_short_thr= st.slider("Short confidence ≥", 50, 100, 70, 1, key="alert_conf_short")
+    cooldown_min  = st.slider("Cooldown (minutes) before re-sending same alert", 1, 1440, 120, key="alert_cooldown")
+
+    def _send_discord(webhook: str, text: str) -> bool:
+        if not webhook: return False
+        try:
+            r = requests.post(webhook, json={"content": text}, timeout=8)
+            return 200 <= r.status_code < 300
+        except Exception:
+            return False
+
+    def _send_email(host: str, port: int, user: str, password: str, to_addr: str, subject: str, body: str) -> bool:
+        if not (host and port and to_addr):
+            return False
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = user or "alerts@quantarax"
+            msg["To"] = to_addr
+            msg.set_content(body)
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=context) as server:
+                if user and password:
+                    server.login(user, password)
+                server.send_message(msg)
+            return True
+        except Exception:
+            return False
+
+    def _should_send(key: str, cooldown_minutes: int) -> bool:
+        last = st.session_state["alert_last_sent"].get(key)
+        if last is None: return True
+        elapsed = (_utcnow_ts() - last).total_seconds() / 60.0
+        return elapsed >= cooldown_minutes
+
+    def _mark_sent(key: str):
+        st.session_state["alert_last_sent"][key] = _utcnow_ts()
+
+    def _alert_key(ticker: str, tag: str, side: str) -> str:
+        raw = f"{ticker}|{tag}|{side}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def _compute_confidence_for_symbol(symbol: str, comp_val: float) -> Tuple[int,int]:
+        comp_max = (w_ma + w_rsi + w_macd + (w_bb if include_bb else 0.0)) if use_weighted else 3.0
+        # MTF
+        d1 = compute_indicators(load_prices(symbol, "1y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+        dH = compute_indicators(load_prices(symbol, "30d", "1h"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+        mtf_long = mtf_short = None
+        if not d1.empty and not dH.empty:
+            c1 = build_composite(d1, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+            cH = build_composite(dH, ma_window, rsi_period, use_weighted=True, w_ma=1.0, w_rsi=1.0, w_macd=1.0, w_bb=0.5, include_bb=True, threshold=1.0)
+            s1 = int(np.sign(c1["Composite"].iloc[-1])); sH = int(np.sign(cH["Composite"].iloc[-1]))
+            mtf_long  = (s1 > 0 and sH > 0); mtf_short = (s1 < 0 and sH < 0)
+        # Regime
+        long_good = short_good = None
+        try:
+            ind_rg = compute_indicators(load_prices(symbol, "2y", "1d"), ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=False)
+            if not ind_rg.empty:
+                feat = pd.DataFrame(index=ind_rg.index)
+                feat["vol20"] = ind_rg["Close"].pct_change().rolling(20).std()
+                feat["mom20"] = ind_rg["Close"].pct_change(20)
+                feat["ma_slope"] = ind_rg[f"MA{ma_window}"].diff()
+                feat = feat.dropna()
+                if SKLEARN_OK and len(feat) >= 60:
+                    km = KMeans(n_clusters=3, n_init=10, random_state=42)
+                    lab = pd.Series(km.fit_predict(feat), index=feat.index)
+                else:
+                    q1 = feat.rank(pct=True)
+                    lab = (q1.mean(axis=1) > 0.66).astype(int) + (q1.mean(axis=1) < 0.33).astype(int)*2
+                joined = ind_rg.join(lab.rename("Regime"), how="right")
+                ret = joined["Close"].pct_change().groupby(joined["Regime"]).mean().sort_values()
+                ord_map = {old:i for i, old in enumerate(ret.index)}
+                cur_r = ord_map.get(lab.iloc[-1], None)
+                if cur_r is not None:
+                    long_good  = (cur_r == 2); short_good = (cur_r == 0)
+        except Exception:
+            pass
+        news_items = fetch_news_bundle(symbol)[:5]
+        conf_long  = confidence_score_side(comp_val, comp_max, mtf_long,  news_items, long_good,  "long")
+        conf_short = confidence_score_side(comp_val, comp_max, mtf_short, news_items, short_good, "short")
+        return conf_long, conf_short
+
+    if st.button("📨 Send TEST alert", key="btn_alert_test"):
+        ok1 = _send_discord(discord_webhook, "QuantaraX TEST: webhook connection OK.") if discord_webhook else False
+        ok2 = _send_email(smtp_host, smtp_port, smtp_user, smtp_pass, email_to, "QuantaraX TEST", "This is a test alert.") if email_to else False
+        if ok1 or ok2: st.success("Test alert sent (Discord and/or Email).")
+        else: st.warning("No alert sent (missing or invalid delivery settings).")
+
+    if st.button("🔎 Check Alerts Now", key="btn_alert_check"):
+        tickers = [t.strip() for t in alert_universe.split(",") if t.strip()]
+        fired = 0
+        for t in tickers:
+            try:
+                px = load_prices(t, period_sel, interval_sel)
+                if px.empty: continue
+                ind = compute_indicators(px, ma_window, rsi_period, macd_fast, macd_slow, macd_signal, use_bb=True)
+                sig = build_composite(ind, ma_window, rsi_period,
+                                      use_weighted=use_weighted, w_ma=w_ma, w_rsi=w_rsi, w_macd=w_macd, w_bb=w_bb,
+                                      include_bb=include_bb, threshold=0.0, allow_short=allow_short)
+                if sig.empty: continue
+                comp_now = float(sig["Composite"].iloc[-1])
+                comp_prev= float(sig["Composite"].iloc[-2]) if len(sig)>=2 else comp_now
+                # Composite cross
+                long_cross  = (comp_prev < a_thr) and (comp_now >= a_thr)
+                short_cross = (comp_prev > -a_thr) and (comp_now <= -a_thr)
+                # Confidence (optional)
+                confL = confS = None
+                if conf_enable:
+                    confL, confS = _compute_confidence_for_symbol(t, comp_now)
+                # Build messages
+                messages=[]
+                if long_cross:
+                    key = _alert_key(t, "comp_cross", "long")
+                    if _should_send(key, cooldown_min):
+                        messages.append(f"🟢 **{t}** Composite crossed **≥ {a_thr:.1f}** (now {comp_now:.2f})")
+                        _mark_sent(key)
+                if short_cross:
+                    key = _alert_key(t, "comp_cross", "short")
+                    if _should_send(key, cooldown_min):
+                        messages.append(f"🔴 **{t}** Composite crossed **≤ -{a_thr:.1f}** (now {comp_now:.2f})")
+                        _mark_sent(key)
+                if conf_enable and confL is not None and confS is not None:
+                    if confL >= conf_long_thr:
+                        key = _alert_key(t, "conf_long", "long")
+                        if _should_send(key, cooldown_min):
+                            messages.append(f"🟢 **{t}** Long confidence **{confL}/100 ≥ {conf_long_thr}**")
+                            _mark_sent(key)
+                    if confS >= conf_short_thr:
+                        key = _alert_key(t, "conf_short", "short")
+                        if _should_send(key, cooldown_min):
+                            messages.append(f"🔴 **{t}** Short confidence **{confS}/100 ≥ {conf_short_thr}**")
+                            _mark_sent(key)
+                # Deliver
+                for msg in messages:
+                    fired += 1
+                    if discord_webhook:
+                        _send_discord(discord_webhook, msg)
+                    if email_to:
+                        _send_email(smtp_host, smtp_port, smtp_user, smtp_pass, email_to, f"QuantaraX Alert: {t}", msg)
+                if messages:
+                    for m in messages:
+                        st.success(m)
+            except Exception as e:
+                st.warning(f"Alert check failed for {t}: {e}")
+        if fired == 0:
+            st.info("No alerts fired.")
+
+    st.caption("Note: This UI triggers alerts on demand. For continuous alerting, keep the app open and click periodically, or run in an environment that refreshes on schedule.")
 
 # ───────────────────────────── REGIMES ─────────────────────────────
 with tab_regime:
@@ -1597,20 +1765,20 @@ We simulate bar-by-bar:
 
 ---
 
-### Strategy Lab (new)
+### Strategy Lab
 - Run **Composite v2**, **Donchian Trend**, **Mean-Revert Z-score** side-by-side.
 - **Parameter Sweep** (MA window × Composite threshold) with a heatmap of returns.
 - Export the **best strategy’s trade log** for review.
 
 ---
 
-### Earnings
-We show **upcoming** earnings if available (UTC), else **last reported**. Try the **Earnings Drift Study** (±3 days) in Engine to see average move around past earnings. Export an **ICS calendar** from the Scanner.
+### Scanner & Saved Scans
+Paste a universe; we rank by Composite and (optionally) **ML probability of an up-move**. Save named scans and run them on demand; export CSVs.
 
 ---
 
-### Scanner
-Paste a universe; we rank by Composite and (optionally) **ML probability of an up-move** (RandomForest). Use as a **screen**, not a final decision.
+### Alerts
+Trigger on **Composite crosses** and/or **Confidence thresholds**, delivered to **Discord** or **Email (SMTP)**. (Manual run via “Check Alerts Now”.)
 
 ---
 
@@ -1627,9 +1795,8 @@ Upload or paste **ticker,shares,cost_basis**. We compute **P/L**, **Composite su
 Extras:
 - **Risk Parity weights** (equal risk contribution) and **rebalance orders**.
 - **Beta hedge sizing** vs SPY to reach a **target net beta**.
-- **Correlation heatmap**, **95% historical VaR**, and **Scenario Shock** (e.g., SPY –5%).
-- **ATR-based position sizing** helper.
-- Export **CSV/JSON** datasets and a **PDF/HTML report** with reasoning.
+- **Correlation heatmap**, **95% historical VaR**, and **Scenario Shock**.
+- Export **CSV/JSON** datasets and a **PDF/HTML report**.
 
 ---
 
@@ -1646,18 +1813,6 @@ Highlights **Golden/Death Cross**, **52-week breakout/breakdown**, **RSI regimes
 ### Modes (Beginner vs Pro)
 - **Beginner:** explanations expanded by default; sensible defaults.
 - **Pro:** same engine; broader tuning and diagnostics.
-
----
-
-### Data health
-The freshness banner shows how current your data is. If it's **stale**, consider daily bars or a longer history.
-
----
-
-### Tips
-- If you see "not enough rows", increase history or reduce windows.
-- Confidence = alignment of ingredients, not certainty.
-- Avoid over-fitting: prefer stable parameters, validate OOS.
 
 ---
 
